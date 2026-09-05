@@ -54,6 +54,59 @@ def extract_json(text: str | None) -> dict | None:
     return None
 
 
+def repair_truncated_json(text: str) -> dict | None:
+    """Best effort for output cut off by max_tokens: walk back to the last complete element
+    (a ',' / ']' / '}' boundary outside strings), close any open brackets, and try json.loads."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    body = text[start:]
+    cuts: list[int] = []
+    in_str = False
+    esc = False
+    for i, ch in enumerate(body):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in ",]}":
+            cuts.append(i)
+    for cut in reversed(cuts[-60:]):
+        prefix = body[:cut] if body[cut] == "," else body[: cut + 1]
+        stack: list[str] = []
+        in_str = False
+        esc = False
+        for ch in prefix:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]" and stack:
+                stack.pop()
+        if in_str:
+            continue
+        candidate = prefix.rstrip().rstrip(",") + "".join(reversed(stack))
+        try:
+            obj = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and obj:
+            return obj
+    return None
+
+
 class LLMClient:
     def __init__(self) -> None:
         self._client: Any = None
@@ -113,7 +166,13 @@ class LLMClient:
             meta["error"] = "llm_unavailable"
             return None, meta
 
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        # Small local models served through GIDE return ZERO tokens when the system prompt is long
+        # (observed live: 969-token prompt -> completion_tokens=0). Folding the instructions into the
+        # user turn under a one-line system prompt yields clean JSON in ~28s, so always do that.
+        messages = [
+            {"role": "system", "content": "Return ONLY a JSON object. No prose, no markdown, no code fences."},
+            {"role": "user", "content": f"{system.strip()}\n\n{user.strip()}"},
+        ]
         t0 = time.perf_counter()
         resp = None
         # GIDE's local API rejects `response_format` (and tools/n/logprobs) outright, so only
@@ -152,6 +211,10 @@ class LLMClient:
             meta["error"] = f"bad_response: {e}"
         meta["raw_text"] = text
         parsed = extract_json(text)
+        if parsed is None:
+            parsed = repair_truncated_json(text)
+            if parsed is not None:
+                log.info('LLM output was truncated; repaired JSON with %d keys', len(parsed))
 
         # A nudge costs another full generation. On a slow local endpoint that guarantees a
         # timeout, so only retry when the first call came back comfortably fast AND the failure

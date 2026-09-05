@@ -41,6 +41,12 @@ else
   warn "gide CLI not installed (curl -fsSL https://generativeide.com/install.sh | sh). Agent runs in deterministic mode."
 fi
 
+# GIDE's server exits on its own after long requests / idle ("Forced shutdown after timeout");
+# keep it alive for the whole demo with a tiny watchdog.
+if command -v gide >/dev/null 2>&1; then
+  ( while true; do gide server start >/dev/null 2>&1 || true; sleep 20; done ) & PIDS+=($!)
+fi
+
 # ---------- 2. IBKR gateway (paper) ----------
 IBKR_STARTED=0
 if [ "${DEMO_IBKR:-auto}" != "0" ] && { [ "${DEMO_IBKR:-auto}" = "1" ] || [ -d "$ROOT/ibkr-gateway" ]; }; then

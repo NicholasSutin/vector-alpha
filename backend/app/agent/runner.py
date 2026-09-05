@@ -500,7 +500,7 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
             bus.publish(run_id, {"type": "tool_call", "name": "llm_narrative",
                                  "input": {"model": settings.llm_model, "chars": len(user_msg)}})
             parsed, llm_meta = await asyncio.to_thread(
-                llm.chat_json, NARRATIVE_SYSTEM_PROMPT, user_msg, 320, 0.2
+                llm.chat_json, NARRATIVE_SYSTEM_PROMPT, user_msg, 420, 0.2
             )
             model_used = llm_meta.get("model") or settings.llm_model or "llm"
             secs = (llm_meta.get("latency_ms") or 0) / 1000.0

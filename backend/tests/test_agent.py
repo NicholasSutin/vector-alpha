@@ -423,7 +423,7 @@ def test_narrative_layer_merges_over_deterministic_report(fake_analytics, monkey
     # ONE call, small prompt, small completion, no retry budget
     assert len(calls) == 1
     system, user, max_tokens, temperature = calls[0]
-    assert max_tokens == 320 and temperature == 0.2
+    assert max_tokens == 420 and temperature == 0.2
     assert len(user) <= 3000, len(user)
     assert "under 120 words" in system.lower()
 

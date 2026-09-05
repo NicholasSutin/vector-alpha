@@ -256,3 +256,7 @@ def build_narrative_message(
     if len(msg) > budget:            # hard cap: drop from the end, keep the header intact
         msg = msg[: budget - 60].rsplit("\n", 1)[0] + "\nReturn ONLY the JSON object. Under 120 words."
     return msg
+
+NARRATIVE_SYSTEM_PROMPT = NARRATIVE_SYSTEM_PROMPT.rstrip() + """
+
+OUTPUT SIZE (hard limits — output is cut at ~400 tokens): keys in this order: headline, why, behaviour, market_context, company_changes. headline: one sentence ≤ 30 words. why: exactly 3 strings, each ≤ 18 words. behaviour: exactly 2 strings, each ≤ 15 words. market_context: at most 3 short strings (empty list if no MARKET CONTEXT given). company_changes: at most 3 items (empty list if none given). No other keys. Total under 110 words."""
