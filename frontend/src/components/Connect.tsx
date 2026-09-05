@@ -71,11 +71,14 @@ export function Connect({
   refresh,
   ibkr,
   refreshIbkr,
+  onDataLoaded,
 }: {
   overview: Overview | null;
   refresh: () => Promise<void>;
   ibkr: IbkrStatus | null;
   refreshIbkr: () => Promise<void>;
+  /** Called after a successful demo load so the app can jump to Explain. */
+  onDataLoaded?: () => void;
 }) {
   /* demo */
   const [demoBusy, setDemoBusy] = useState(false);
@@ -128,6 +131,8 @@ export function Connect({
     try {
       setDemoResult(await ingestDemo());
       await refresh();
+      // Straight to the story: the demo book exists to be explained.
+      window.setTimeout(() => onDataLoaded?.(), 700);
     } catch (e) {
       setDemoErr(err(e));
     } finally {
@@ -285,6 +290,12 @@ export function Connect({
               </select>
             </Field>
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Accepts <span className="text-slate-400">Robinhood activity export</span>,{' '}
+            <span className="text-slate-400">IBKR Flex query CSV</span>,{' '}
+            <span className="text-slate-400">any generic ledger</span> (date, symbol, side, qty,
+            price, amount), or <span className="text-slate-400">auto-detect</span>.
+          </p>
           <Button className="mt-3" onClick={uploadCsv} disabled={!file || csvBusy}>
             {csvBusy ? <Spinner /> : <FileUp size={14} />}
             Upload &amp; ingest
@@ -420,6 +431,13 @@ export function Connect({
                 onChange={(e) => setRhMfa(e.target.value)}
               />
             </div>
+          )}
+
+          {!rh?.logged_in && (
+            <p className="mt-2 text-xs text-slate-500">
+              Credentials are used only for this session to call Robinhood on your behalf — they are
+              never stored.
+            </p>
           )}
 
           {rhChallenge && (

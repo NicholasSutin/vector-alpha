@@ -281,6 +281,8 @@ export function Memory({
               events={detail.events}
               running={false}
               prismSession={detail.run.prism_session_id}
+              collapsible
+              defaultOpen={false}
             />
           )}
         </div>

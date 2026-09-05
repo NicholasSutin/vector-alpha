@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import {
   AlertTriangle,
@@ -63,12 +64,117 @@ const PRIORITY: Record<string, { ring: string; dot: string; label: string }> = {
 };
 
 const VERDICT_TONE: Record<string, 'emerald' | 'rose' | 'amber' | 'sky' | 'slate'> = {
-  followed: 'sky',
   validated: 'emerald',
   invalidated: 'rose',
+  followed: 'sky',
   ignored: 'amber',
   unclear: 'slate',
 };
+
+/** Most decision-useful verdicts first. */
+const VERDICT_RANK: Record<string, number> = {
+  validated: 0,
+  invalidated: 1,
+  followed: 2,
+  ignored: 3,
+  unclear: 4,
+};
+
+const REVIEW_CAP = 8;
+const SOURCE_CAP = 8;
+
+function MoreLink({ open, onClick, label }: { open: boolean; onClick: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-2 inline-flex rounded text-xs font-semibold text-sky-400 hover:text-sky-300"
+    >
+      {open ? 'Show less' : (label ?? 'Show more')}
+    </button>
+  );
+}
+
+/** Clamps long report text to 4 lines with a toggle. */
+function ClampText({ text, className }: { text: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 220;
+  return (
+    <>
+      <p className={clsx(className, !open && long && 'line-clamp-4')}>{text}</p>
+      {long && <MoreLink open={open} onClick={() => setOpen((v) => !v)} label="more" />}
+    </>
+  );
+}
+
+function PriorInsightReview({ items }: { items: Report['prior_insight_review'] }) {
+  const [showAll, setShowAll] = useState(false);
+  const sorted = useMemo(
+    () =>
+      [...items].sort(
+        (x, y) => (VERDICT_RANK[x.verdict] ?? 9) - (VERDICT_RANK[y.verdict] ?? 9),
+      ),
+    [items],
+  );
+  const shown = showAll ? sorted : sorted.slice(0, REVIEW_CAP);
+  return (
+    <>
+      <div className="space-y-2.5">
+        {shown.map((r, i) => (
+          <div
+            key={i}
+            className="flex flex-col gap-1.5 rounded-xl border border-slate-800 bg-slate-950/40 p-3.5 sm:flex-row sm:items-start sm:gap-3"
+          >
+            <Pill tone={VERDICT_TONE[r.verdict] ?? 'slate'}>{r.verdict}</Pill>
+            <div className="min-w-0 flex-1">
+              <ClampText text={r.text} className="text-sm text-slate-200" />
+              {r.note && <p className="mt-0.5 text-xs text-slate-500">{r.note}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+      {sorted.length > REVIEW_CAP && (
+        <MoreLink
+          open={showAll}
+          onClick={() => setShowAll((v) => !v)}
+          label={`Show all (${sorted.length})`}
+        />
+      )}
+    </>
+  );
+}
+
+function SourcesList({ sources }: { sources: string[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? sources : sources.slice(0, SOURCE_CAP);
+  return (
+    <>
+      <ul className="space-y-1.5">
+        {shown.map((s, i) => (
+          <li key={i}>
+            <a
+              href={s}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded text-sm text-sky-400 hover:text-sky-300 hover:underline"
+            >
+              <ExternalLink size={12} />
+              {hostOf(s)}
+              <span className="text-slate-600">{s.length > 70 ? s.slice(0, 69) + '…' : s}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+      {sources.length > SOURCE_CAP && (
+        <MoreLink
+          open={showAll}
+          onClick={() => setShowAll((v) => !v)}
+          label={`Show all (${sources.length})`}
+        />
+      )}
+    </>
+  );
+}
 
 export function ReportView({
   report,
@@ -164,7 +270,7 @@ export function ReportView({
                     {c.symbol}
                   </span>
                 </div>
-                <p>{c.text}</p>
+                <ClampText text={c.text} />
                 {c.sources?.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {c.sources.slice(0, 3).map((u, j) => (
@@ -286,20 +392,7 @@ export function ReportView({
 
       {report.prior_insight_review?.length > 0 && (
         <Section title="Prior insight review" icon={<History size={14} />}>
-          <div className="space-y-2.5">
-            {report.prior_insight_review.map((r, i) => (
-              <div
-                key={i}
-                className="flex flex-col gap-1.5 rounded-xl border border-slate-800 bg-slate-950/40 p-3.5 sm:flex-row sm:items-start sm:gap-3"
-              >
-                <Pill tone={VERDICT_TONE[r.verdict] ?? 'slate'}>{r.verdict}</Pill>
-                <div className="min-w-0">
-                  <p className="text-sm text-slate-200">{r.text}</p>
-                  {r.note && <p className="mt-0.5 text-xs text-slate-500">{r.note}</p>}
-                </div>
-              </div>
-            ))}
-          </div>
+          <PriorInsightReview items={report.prior_insight_review} />
         </Section>
       )}
 
@@ -311,22 +404,7 @@ export function ReportView({
 
       {report.sources?.length > 0 && (
         <Section title="Sources" icon={<Globe2 size={14} />}>
-          <ul className="space-y-1.5">
-            {report.sources.map((s, i) => (
-              <li key={i}>
-                <a
-                  href={s}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm text-sky-400 hover:text-sky-300 hover:underline"
-                >
-                  <ExternalLink size={12} />
-                  {hostOf(s)}
-                  <span className="text-slate-600">{s.length > 70 ? s.slice(0, 69) + '…' : s}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
+          <SourcesList sources={report.sources} />
         </Section>
       )}
     </div>

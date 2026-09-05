@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, GitCompare, Sparkles, TrendingDown } from 'lucide-react';
+import { ArrowRight, GitCompare, RotateCw, Sparkles, TrendingDown } from 'lucide-react';
 import type { AgentEvent, Overview, Report, VarianceReport } from '../api';
 import { comparePeriods, getPeriods, startAnalysis, subscribeToRun } from '../api';
 import { Button, Card, ErrorBox, Pill, Spinner, inputCls } from './Pills';
@@ -46,6 +46,7 @@ export function Explain({
   } | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   // default to the consecutive month pair with the largest realized-P&L swing
   // (the track's "find the most meaningful variance"); fall back to the last two periods.
@@ -102,6 +103,16 @@ export function Explain({
 
   useEffect(() => () => unsubRef.current?.(), []);
 
+  // Bring the headline into view the moment the report lands.
+  useEffect(() => {
+    if (!report) return;
+    const id = window.setTimeout(
+      () => reportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      120,
+    );
+    return () => window.clearTimeout(id);
+  }, [report]);
+
   const run = async () => {
     if (!a || !b) return;
     unsubRef.current?.();
@@ -157,7 +168,7 @@ export function Explain({
   return (
     <div className="space-y-5">
       {/* Period pickers + question + CTA */}
-      <Card className="!p-4">
+      <Card>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
           <div className="flex items-end gap-3">
             <label className="block">
@@ -207,9 +218,33 @@ export function Explain({
             disabled={running || !a || !b}
           >
             {running ? <Spinner /> : <Sparkles size={16} />}
-            {running ? 'Analysing…' : 'Explain the change'}
+            {running ? 'Analyzing…' : 'Explain the change'}
           </Button>
         </div>
+        {running && (
+          <div className="mt-3">
+            <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800">
+              <div className="va-indeterminate h-full w-2/5 rounded-full bg-sky-400" />
+            </div>
+            <p className="va-pulse mt-2 text-xs font-semibold tracking-wide text-sky-300">
+              Analyzing {periodLabel(a)} → {periodLabel(b)}…
+            </p>
+          </div>
+        )}
+        {!running && report && (
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={run}
+              className="inline-flex items-center gap-1.5 rounded-lg text-xs font-semibold text-sky-400 hover:text-sky-300"
+            >
+              <RotateCw size={12} /> Run again
+            </button>
+            <span className="text-xs text-slate-600">
+              Re-runs the agent on the same periods
+            </span>
+          </div>
+        )}
         <ErrorBox message={runErr} />
       </Card>
 
@@ -306,20 +341,24 @@ export function Explain({
           running={running}
           prismSession={runMeta?.prismSession}
           prismUrl={runMeta?.prismUrl}
+          collapsible
+          defaultOpen={running}
         />
       )}
 
       {report && runMeta && (
-        <ReportView
-          report={report}
-          model={runMeta.model}
-          latencyMs={runMeta.latency}
-          fallback={runMeta.fallback}
-          prismSession={runMeta.prismSession}
-          prismUrl={runMeta.prismUrl}
-          runId={runMeta.runId}
-          ibkrReady={ibkrReady}
-        />
+        <div ref={reportRef} className="scroll-mt-32">
+          <ReportView
+            report={report}
+            model={runMeta.model}
+            latencyMs={runMeta.latency}
+            fallback={runMeta.fallback}
+            prismSession={runMeta.prismSession}
+            prismUrl={runMeta.prismUrl}
+            runId={runMeta.runId}
+            ibkrReady={ibkrReady}
+          />
+        </div>
       )}
     </div>
   );

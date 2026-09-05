@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import {
   Activity,
@@ -6,6 +6,7 @@ import {
   BarChart3,
   Brain,
   CheckCircle2,
+  ChevronDown,
   Database,
   Globe,
   Lightbulb,
@@ -45,27 +46,66 @@ export function AgentTrace({
   running,
   prismSession,
   prismUrl,
+  collapsible = false,
+  defaultOpen = true,
 }: {
   events: AgentEvent[];
   running: boolean;
   prismSession?: string | null;
   prismUrl?: string | null;
+  /** Render a disclosure header the user can toggle. */
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(defaultOpen);
+
+  // Expanded while streaming; collapses itself once the run finishes.
+  const wasRunning = useRef(running);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [events.length]);
+    if (running) setOpen(true);
+    else if (wasRunning.current && collapsible) setOpen(false);
+    wasRunning.current = running;
+  }, [running, collapsible]);
+
+  useEffect(() => {
+    if (open) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [events.length, open]);
 
   const visible = events.filter((e) => e.type !== 'text');
+  const toolCalls = visible.filter((e) => e.type === 'tool_call').length;
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-      <header className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <header className={clsx('flex items-center justify-between gap-3', open ? 'mb-3' : 'mb-0')}>
+        <button
+          type="button"
+          onClick={() => collapsible && setOpen((v) => !v)}
+          disabled={!collapsible}
+          aria-expanded={open}
+          className={clsx(
+            'flex items-center gap-2 rounded-lg text-left',
+            collapsible && 'cursor-pointer hover:opacity-80',
+          )}
+        >
           <Brain size={16} className={clsx('text-violet-400', running && 'va-pulse')} />
           <h3 className="text-base font-semibold text-slate-100">Agent trace</h3>
           {running && <Spinner className="text-violet-400" />}
-        </div>
+          {collapsible && (
+            <>
+              <span className="text-xs font-medium text-slate-500">
+                {toolCalls} tool call{toolCalls === 1 ? '' : 's'}
+              </span>
+              <ChevronDown
+                size={15}
+                className={clsx(
+                  'text-slate-500 transition-transform',
+                  open ? 'rotate-180' : 'rotate-0',
+                )}
+              />
+            </>
+          )}
+        </button>
         {prismSession && (
           <a
             href={prismUrl || '#'}
@@ -82,13 +122,16 @@ export function AgentTrace({
         )}
       </header>
 
-      {visible.length === 0 && (
+      {open && visible.length === 0 && (
         <p className="py-6 text-center text-sm text-slate-500">
           {running ? 'Waiting for the first tool call…' : 'No trace events yet.'}
         </p>
       )}
 
-      <ol className="relative max-h-[26rem] space-y-1 overflow-y-auto pr-1">
+      <ol
+        className="relative max-h-[26rem] space-y-1 overflow-y-auto pr-1"
+        hidden={!open}
+      >
         {visible.map((e, i) => {
           if (e.type === 'status') {
             return (

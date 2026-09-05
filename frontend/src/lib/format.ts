@@ -144,3 +144,30 @@ export function hostOf(url: string): string {
     return url;
   }
 }
+
+/** "2 min ago" / "in 3 min" / "just now" */
+export function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const secs = Math.round((Date.now() - d.getTime()) / 1000);
+  const abs = Math.abs(secs);
+  if (abs < 45) return 'just now';
+  const units: [number, string][] = [
+    [60, 'min'],
+    [3600, 'hr'],
+    [86400, 'day'],
+    [604800, 'week'],
+  ];
+  let value = abs;
+  let unit = 'sec';
+  for (const [div, name] of units) {
+    if (abs >= div) {
+      value = Math.floor(abs / div);
+      unit = name;
+    }
+  }
+  if (abs >= 2592000) return shortDate(iso);
+  const label = `${value} ${unit}${value === 1 ? '' : 's'}`;
+  return secs >= 0 ? `${label} ago` : `in ${label}`;
+}

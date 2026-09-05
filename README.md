@@ -107,7 +107,7 @@ app, the IBKR login page and the PRISM dashboard in your browser. Over SSH it pr
 Then in the UI: **Explain the Change → "Explain the change"**, and **Trade Desk** to execute the
 agent's proposed paper trades and watch fills, P&L since fill, and performance.
 
-Dev mode with hot reload: `./scripts/dev.sh` (UI :5173, API :8000). Shell-only smoke demo:
+The 90-second walkthrough is in [docs/DEMO.md](docs/DEMO.md). Dev mode with hot reload: `./scripts/dev.sh` (UI :5173, API :8000). Shell-only smoke demo:
 `./scripts/demo.sh`.
 
 Tests: `cd backend && .venv/bin/python -m pytest -q`
@@ -172,5 +172,5 @@ backend/app/brokers/      ibkr (gateway), ibkr_flex, robinhood, guard
 backend/app/routes/       ingest, analytics, agent, brokers
 frontend/                 Vite + React UI (Connect · Explain the Change · Memory & Runs)
 docs/                     ARCHITECTURE.md, API.md
-scripts/                  dev.sh, build.sh, demo.sh, ibkr-gateway.sh
+scripts/                  hackathon-demo.sh (one-command demo), dev.sh, build.sh, demo.sh, ibkr-gateway.sh, pack-usb.sh
 ```

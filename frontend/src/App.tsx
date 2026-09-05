@@ -40,6 +40,33 @@ function writeTab(t: Tab) {
   }
 }
 
+function EmptyState({
+  icon,
+  title,
+  body,
+  onConnect,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="flex min-h-[50vh] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/30 p-12 text-center">
+      <span className="mb-4 text-slate-700">{icon}</span>
+      <h2 className="text-xl font-semibold text-slate-200">{title}</h2>
+      <p className="mt-2 max-w-md text-slate-500">{body}</p>
+      <button
+        type="button"
+        onClick={onConnect}
+        className="mt-5 inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg shadow-sky-500/20 transition hover:bg-sky-400"
+      >
+        <Plug size={15} /> Go to Connect
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>(() => readTab() ?? 'connect');
   const [health, setHealth] = useState<Health | null>(null);
@@ -99,7 +126,14 @@ export default function App() {
   const hasTavily = health?.has_tavily ?? health?.has_tavily_key ?? false;
 
   const hasLlm = health?.has_llm ?? health?.has_anthropic_key ?? false;
-  const llmLabel = hasLlm ? `${health?.llm_provider || 'LLM'} · ${(health?.llm_model || health?.model || 'local').replace(/^@cf\//, '')}` : 'deterministic';
+  const llmModel = (health?.llm_model || health?.model || 'local').replace(/^@cf\//, '');
+  const llmShort = llmModel.split('/').pop() ?? llmModel;
+  const llmLabel = hasLlm
+    ? `${health?.llm_provider || 'LLM'} · ${llmShort.length > 22 ? llmShort.slice(0, 21) + '…' : llmShort}`
+    : 'deterministic';
+  const llmTitle = hasLlm
+    ? `${health?.llm_provider ?? 'llm'} · ${llmModel}${health?.llm_fallback ? ` (fallback: ${health.llm_fallback})` : ''}`
+    : 'No LLM key configured — reports are narrated deterministically from computed facts';
   const llmTone: Tone = hasLlm ? 'violet' : 'amber';
 
   const prismLabel = prism?.live_connected
@@ -123,23 +157,23 @@ export default function App() {
       {/* Top bar */}
       <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-[#0b0f17]/95 backdrop-blur">
         <div className="mx-auto max-w-[1400px] px-5 py-4">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-            <div className="flex items-baseline gap-3">
-              <h1 className="text-xl font-bold tracking-tight text-slate-50">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <div className="flex min-w-0 items-baseline gap-3">
+              <h1 className="text-xl font-bold tracking-tight whitespace-nowrap text-slate-50">
                 Vector<span className="text-sky-400"> Alpha</span>
               </h1>
-              <p className="hidden text-sm text-slate-500 sm:block">
+              <p className="hidden truncate text-sm text-slate-500 lg:block">
                 Explain the change in your own portfolio
               </p>
             </div>
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5 md:ml-auto">
               <StatusPill
                 label="Data"
                 value={overview?.has_data ? `${int(overview.transactions)} txns` : 'none'}
                 tone={overview?.has_data ? 'emerald' : 'slate'}
                 title={overview?.periods?.join(', ')}
               />
-              <StatusPill label="LLM" value={llmLabel} tone={llmTone} />
+              <StatusPill label="LLM" value={llmLabel} tone={llmTone} title={llmTitle} />
               <StatusPill
                 label="Macro"
                 value={hasTavily ? 'Tavily' : 'off'}
@@ -157,7 +191,7 @@ export default function App() {
           </div>
 
           {/* Tabs */}
-          <nav className="mt-4 flex gap-1">
+          <nav className="mt-4 flex flex-wrap gap-1">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -196,26 +230,51 @@ export default function App() {
             refresh={refreshOverview}
             ibkr={ibkr}
             refreshIbkr={refreshIbkr}
+            onDataLoaded={() => selectTab('explain')}
           />
         )}
-        {booted && tab === 'explain' && (
-          <Explain
-            overview={overview}
-            ibkrReady={Boolean(ibkr?.authenticated)}
-            onRunFinished={() => setReloadToken((n) => n + 1)}
-          />
-        )}
-        {booted && tab === 'desk' && (
-          <TradeDesk
-            ibkr={ibkr}
-            refreshIbkr={refreshIbkr}
-            reloadToken={reloadToken}
-            onGoConnect={() => selectTab('connect')}
-          />
-        )}
-        {booted && tab === 'memory' && (
-          <Memory ibkrReady={Boolean(ibkr?.authenticated)} reloadToken={reloadToken} />
-        )}
+        {booted && tab === 'explain' &&
+          (overview?.has_data ? (
+            <Explain
+              overview={overview}
+              ibkrReady={Boolean(ibkr?.authenticated)}
+              onRunFinished={() => setReloadToken((n) => n + 1)}
+            />
+          ) : (
+            <EmptyState
+              icon={<Sparkles size={40} />}
+              title="No book connected yet"
+              body="Load the demo book or connect a broker, then come back to explain the change between any two months."
+              onConnect={() => selectTab('connect')}
+            />
+          ))}
+        {booted && tab === 'desk' &&
+          (overview?.has_data ? (
+            <TradeDesk
+              ibkr={ibkr}
+              refreshIbkr={refreshIbkr}
+              reloadToken={reloadToken}
+              onGoConnect={() => selectTab('connect')}
+            />
+          ) : (
+            <EmptyState
+              icon={<LineChart size={40} />}
+              title="Nothing to trade against yet"
+              body="The desk shows agent proposals, paper fills and whole-book performance. It needs a book first."
+              onConnect={() => selectTab('connect')}
+            />
+          ))}
+        {booted && tab === 'memory' &&
+          (overview?.has_data ? (
+            <Memory ibkrReady={Boolean(ibkr?.authenticated)} reloadToken={reloadToken} />
+          ) : (
+            <EmptyState
+              icon={<Brain size={40} />}
+              title="No memory yet"
+              body="Insights and run history appear here once the agent has explained a change."
+              onConnect={() => selectTab('connect')}
+            />
+          ))}
       </main>
 
       <footer className="mx-auto max-w-[1400px] px-5 pb-10 text-xs text-slate-700">

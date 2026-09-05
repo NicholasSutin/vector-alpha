@@ -13,6 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  AlertTriangle,
   Ban,
   Building2,
   ExternalLink,
@@ -42,7 +43,7 @@ import {
 } from '../api';
 import { Button, Card, ErrorBox, Field, Pill, Spinner, inputCls } from './Pills';
 import type { Tone } from './Pills';
-import { dateTime, days, int, pct, periodLabel, signedUsd, usd } from '../lib/format';
+import { dateTime, days, int, pct, periodLabel, relativeTime, signedUsd, usd } from '../lib/format';
 
 const STATUS_TONE: Record<string, Tone> = {
   proposed: 'slate',
@@ -305,7 +306,12 @@ function OrdersTable({ orders, onCancel }: { orders: Order[]; onCancel: (id: str
                       {o.limit_price != null ? ` @ ${usd(o.limit_price, 2)}` : ''}
                     </span>
                   </div>
-                  <div className="mt-0.5 text-[11px] text-slate-600">{dateTime(o.created_at)}</div>
+                  <div
+                    className="mt-0.5 text-[11px] text-slate-600"
+                    title={dateTime(o.created_at)}
+                  >
+                    {relativeTime(o.created_at)}
+                  </div>
                 </td>
                 <td className="py-2.5 pr-4">
                   <Pill tone={STATUS_TONE[o.status] ?? 'slate'}>{o.status}</Pill>
@@ -316,8 +322,11 @@ function OrdersTable({ orders, onCancel }: { orders: Order[]; onCancel: (id: str
                     <span className="ml-1 text-[11px] text-slate-600">×{o.fill.qty}</span>
                   )}
                 </td>
-                <td className="py-2.5 pr-4 text-slate-500">
-                  {o.fill?.time ? dateTime(o.fill.time) : '—'}
+                <td
+                  className="py-2.5 pr-4 text-slate-500"
+                  title={o.fill?.time ? dateTime(o.fill.time) : undefined}
+                >
+                  {o.fill?.time ? relativeTime(o.fill.time) : '—'}
                 </td>
                 <td className="py-2.5 pr-4 text-right text-slate-300 tabular-nums">
                   {o.mark != null ? usd(o.mark, 2) : '—'}
@@ -572,19 +581,26 @@ export function TradeDesk({
     if (perfRes.status === 'fulfilled') setPerf(perfRes.value);
     else setError(perfRes.reason?.message ?? null);
     if (runsRes.status === 'fulfilled') {
-      const done = (runsRes.value.runs ?? []).find(
+      // Prefer the most recent completed run that actually proposes trades (a calm month may
+      // legitimately propose nothing); fall back to the latest completed run.
+      const doneRuns = (runsRes.value.runs ?? []).filter(
         (r) => r.status === 'done' || r.status === 'complete' || r.status === 'ok',
       );
-      if (done) {
+      let picked: { run: (typeof doneRuns)[number]; trades: ProposedTrade[] } | null = null;
+      for (const run of doneRuns.slice(0, 6)) {
         try {
-          const d = await getRun(done.id);
-          setProposed({ run: done, trades: d.report?.proposed_trades ?? [] });
+          const d = await getRun(run.id);
+          const trades = d.report?.proposed_trades ?? [];
+          if (!picked) picked = { run, trades };
+          if (trades.length > 0) {
+            picked = { run, trades };
+            break;
+          }
         } catch {
-          setProposed(null);
+          /* try the next run */
         }
-      } else {
-        setProposed(null);
       }
+      setProposed(picked);
     }
     setLoading(false);
   }, []);
@@ -640,6 +656,43 @@ export function TradeDesk({
           </Button>
         </div>
       </div>
+
+      {!ready && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/35 bg-amber-500/10 px-5 py-4">
+          <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-400" />
+          <div className="min-w-0">
+            <p className="font-semibold text-amber-200">
+              IBKR paper gateway is not connected — previews and executions will fail.
+            </p>
+            <ol className="mt-2 space-y-1 text-sm text-amber-100/80">
+              <li>
+                <span className="mr-1.5 font-bold text-amber-300">1.</span>
+                Run <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[12px]">./scripts/ibkr-gateway.sh</code>
+              </li>
+              <li>
+                <span className="mr-1.5 font-bold text-amber-300">2.</span>
+                Open{' '}
+                <a
+                  href="https://localhost:5001"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded font-mono text-[12px] underline decoration-amber-400/50 underline-offset-2 hover:text-amber-50"
+                >
+                  https://localhost:5001
+                </a>
+              </li>
+              <li>
+                <span className="mr-1.5 font-bold text-amber-300">3.</span>
+                Log in with the paper (<span className="font-mono text-[12px]">DU…</span>) username
+              </li>
+              <li>
+                <span className="mr-1.5 font-bold text-amber-300">4.</span>
+                Click <span className="font-semibold">Refresh</span> above
+              </li>
+            </ol>
+          </div>
+        </div>
+      )}
 
       <ErrorBox message={error} />
 
