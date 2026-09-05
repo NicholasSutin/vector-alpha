@@ -1,22 +1,14 @@
-# Demo script (≤ 90 seconds)
+# Demo — what gets shown (90 s)
 
-Setup before recording: `./scripts/hackathon-demo.sh` (or `cd frontend && pnpm run hackathon-demo`).
-Have the IBKR paper gateway logged in (https://localhost:5001) if you want to show a real fill.
+Start: `./scripts/hackathon-demo.sh` (or `DEMO_RESET=1 …` for a clean take), IBKR gateway logged in on https://localhost:5001.
 
-**Seed the memory story first** (once): in the UI run **Jun 2026 → Jul 2026** (the bad month; the agent
-writes its advisements to memory), then run **Jul 2026 → Aug 2026** — the "prior insight review" shows the
-July advisements as *validated / followed* because August traded less, held longer and cut NVDA.
-`DEMO_RESET=1 ./scripts/hackathon-demo.sh` wipes runs/insights and reloads the demo book for a clean take.
+| # | Tab | Shown | Point made |
+|---|---|---|---|
+| 1 | Connect | Demo book loaded (or a Robinhood CSV dropped in), sources table, IBKR + Robinhood cards | Your own history, four input formats, paper-only broker |
+| 2 | Explain the Change | Jun→Jul auto-selected (largest swing), KPI deltas, P&L bridge, ranked drivers with lot ids, behaviour flags | The variance engine finds the meaningful change and drills to transactions |
+| 3 | Explain the Change | Click **Explain the change**: live agent trace (recall → compare → drill → Tavily macro/company → model), then the report: headline, what changed, why, company changes, market context, advisements | "P&L fell $2,602, 70% from five NVDA earnings-week calls, amplified by 77% more trades" — evidence-backed, sourced |
+| 4 | Explain the Change | Switch to Jul→Aug, run again: prior insight review shows July's advisements **validated** | Learns across runs; builds business context in memory |
+| 5 | Trade Desk | Proposed SELL NVDA → Preview (whatIf) → Execute on paper → fill, mark, P&L since fill; performance chart | Advisement becomes a real paper order; the fill feeds the next run |
+| 6 | Memory & Runs | Runs list, insight memory, PRISM card (live, trace count) → open PRISM dashboard | Observe → Improve → Prove; every run is one trajectory |
 
-| t | Screen | Say |
-|---|---|---|
-| 0:00 | Explain the Change tab, June → July selected | "Every trader gets a red number and no explanation. Vector Alpha is the Money-Ops 'explain the change' agent, pointed at your own brokerage history." |
-| 0:10 | KPI tiles + P&L bridge | "Connect Robinhood or IBKR history, or the demo book. July P&L fell $2,600 versus June. The bridge already shows NVDA, AMD and TSLA options did it." |
-| 0:20 | Click **Explain the change**; agent trace streams | "The agent recalls last month's insights, compares the periods, drills into the lots behind each driver, pulls market context from Tavily, and reasons on a local model through GIDE. Every step is traced to PRISM." |
-| 0:40 | Report: headline, drivers, behaviour | "Not 'P&L fell 145%' but: 70% of the decline was five NVDA earnings-week calls, amplified by 73% more trades, hold time collapsing from 9 days to 2, and NVDA becoming 55% of what you bought." |
-| 0:55 | Advisements + prior insight review | "It turns that into measurable rules and, next month, checks whether you followed them. Memory across runs." |
-| 1:05 | Trade Desk: Preview → Execute on IBKR paper | "It can act: the concentration advisement becomes a paper order on IBKR, previewed with whatIf, then filled. The fill lands back in the ledger for the next run." |
-| 1:20 | Memory & Runs: PRISM card (live connected, trace count) | "Observe, improve, prove: PRISM shows the trajectory of every run. Built today, from scratch, on GIDE. Thanks." |
-
-Fallbacks: if the local model is busy, the run completes in deterministic mode (same report shape, badge shows it).
-If IBKR is not logged in, Execute buttons are disabled with a tooltip — show the preview JSON from a prior run instead.
+Fallbacks: model busy → deterministic report (badge shows it). IBKR not logged in → Execute disabled; show the preview from a prior order instead.
