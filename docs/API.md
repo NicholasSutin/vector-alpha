@@ -114,3 +114,35 @@ type ProposedTrade = { id: string; symbol: string; side: "BUY"|"SELL"; qty: numb
 
 ## Addendum (13:40) — market/macro context
 `Report` gains an optional `market_context: string[]` (default `[]`): 3-6 bullets describing the market/macro regime in period B vs A (index moves, VIX, Fed/rates, sector events) sourced via Tavily, each ending with a `[source: url]` tag where possible. The frontend renders it as a "Market context" section when non-empty.
+
+## Addendum (13:45) — Trade Desk: execution outcomes + performance
+
+### `GET /performance` (analytics) → portfolio performance for the whole book
+```ts
+{
+  monthly: { period: string; realized_pnl: number; cum_realized: number; net_deposits: number; cum_net_deposits: number;
+             fees: number; trade_count: number; win_rate: number }[];   // asc
+  stats: { total_realized: number; total_fees: number; total_net_deposits: number; months: number;
+           best_period: string|null; worst_period: string|null; max_drawdown: number;    // on cum_realized
+           win_rate: number; profit_factor: number; expectancy: number; avg_hold_days: number };
+  by_underlying: Driver[];        // whole-book, sorted by |realized_pnl| desc, top 15
+  positions: Position[];          // current open positions (replay + latest snapshot)
+}
+```
+
+### Orders (brokers) — enriched `Order` shape returned by `GET /brokers/ibkr/orders`, preview, place
+```ts
+type Order = {
+  id: string; created_at: string; run_id: string|null; account_id: string; symbol: string; conid: number|null;
+  side: "BUY"|"SELL"; qty: number; order_type: "MKT"|"LMT"; limit_price: number|null; tif: string;
+  status: "proposed"|"previewed"|"submitted"|"filled"|"partially_filled"|"cancelled"|"rejected"|"error";
+  broker_order_id: string|null; rationale: string;
+  preview: { commission?: number|null; equity_with_loan_before?: number|null; equity_with_loan_after?: number|null; amount?: string|null; warnings: string[] } | null;
+  fill: { price: number|null; qty: number|null; time: string|null } | null;     // from gateway order status / trades
+  mark: number|null;                 // latest snapshot last price (best effort)
+  pnl_since_fill: number|null;       // (mark − fill.price) × qty × (BUY:+1 / SELL:−1)
+  messages: string[];                // broker confirmation / rejection messages
+};
+```
+`GET /brokers/ibkr/orders` refreshes status/fill/mark from the gateway when reachable (never throws; stale values otherwise).
+When an order fills, the broker module also inserts the fill as a `transactions` row (source `ibkr_live`, external_id = broker_order_id) so the next agent run sees it.

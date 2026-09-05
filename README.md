@@ -82,16 +82,24 @@ contribution % and evidence ids → market context → behaviour → advisements
 5. **Memory** → advisements saved; next run reviews them.
 6. **Act** → `POST /api/brokers/ibkr/orders/preview` → `.../place` (paper only).
 
-## Run it
+## Run it — one command
 
 ```bash
 git clone https://github.com/NicholasSutin/vector-alpha && cd vector-alpha
 cp .env.example .env            # fill what you have (all optional)
-./scripts/dev.sh                # UI http://localhost:5173 · API http://localhost:8000/docs
+./scripts/hackathon-demo.sh     # = `cd frontend && pnpm run hackathon-demo`
 ```
 
-Then in the UI: **Connect → Load demo book → Explain the Change → "Explain the change"**.
-Or from a shell: `./scripts/demo.sh`.
+That starts the GIDE local model server, the IBKR paper gateway (if present), builds and serves the
+UI + API on http://localhost:8000, loads the demo book if the database is empty, and opens the
+app, the IBKR login page and the PRISM dashboard in your browser. Over SSH it prints the
+`ssh -L` port-forward line instead. Ctrl-C stops everything.
+
+Then in the UI: **Explain the Change → "Explain the change"**, and **Trade Desk** to execute the
+agent's proposed paper trades and watch fills, P&L since fill, and performance.
+
+Dev mode with hot reload: `./scripts/dev.sh` (UI :5173, API :8000). Shell-only smoke demo:
+`./scripts/demo.sh`.
 
 Tests: `cd backend && .venv/bin/python -m pytest -q`
 
