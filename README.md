@@ -16,7 +16,9 @@ Realized P&L fell from $1,820 to −$320 (−$2,140).
 Advisement: no new option opens within 5 trading days of earnings; cap any single name at 30% of monthly buys.
 ```
 
-## Problem
+![Explain the Change](docs/screenshot-explain.png)
+
+## Problem statement
 
 Finance teams get asked "why did this number move?" every month. The Maximor challenge asks for
 an agent that takes **monthly summaries + transaction-level data**, compares periods, finds the
@@ -50,7 +52,9 @@ contribution % and evidence ids → market context → behaviour → advisements
 - **Observe → Improve → Prove**: every run is one PRISM trajectory (`session_id = run_id`),
   with tool steps, latency and the model call; the UI shows PRISM's live status.
 
-## Tech stack
+![Trade Desk](docs/screenshot-trade-desk.png)
+
+## Tech stack used
 
 | Layer | Tech |
 |---|---|
@@ -82,7 +86,7 @@ contribution % and evidence ids → market context → behaviour → advisements
 5. **Memory** → advisements saved; next run reviews them.
 6. **Act** → `POST /api/brokers/ibkr/orders/preview` → `.../place` (paper only).
 
-## Run it — one command
+## How to run / use it — one command
 
 ```bash
 git clone https://github.com/NicholasSutin/vector-alpha && cd vector-alpha

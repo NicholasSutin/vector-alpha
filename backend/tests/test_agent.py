@@ -70,11 +70,15 @@ def test_run_analysis_end_to_end(fake_analytics):
     assert report["confidence"] == 0.6
     assert report["market_context"] == []               # no Tavily key
 
-    # a concentration-driven paper trade was proposed against a real long position
+    # headline names the underlying driver (not the asset class) and its strategy tag
+    assert "NVDA earnings-week calls" in report["headline"], report["headline"]
+    assert "6 lots" in report["headline"]      # NVDA lots closed in period b, not a fixed number
+
+    # a concentration-driven paper trade trims 25% of the NVDA long (9 shares -> 3)
     assert len(report["proposed_trades"]) == 1
     pt = report["proposed_trades"][0]
-    assert pt["symbol"] == "NVDA" and pt["side"] == "SELL" and 1 <= pt["qty"] <= 3
-    assert pt["order_type"] == "MKT"
+    assert pt["symbol"] == "NVDA" and pt["side"] == "SELL" and pt["qty"] == 3
+    assert pt["order_type"] == "MKT" and pt["tif"] == "DAY"
 
     # insights persisted (headline + advisements)
     saved = memory.recall_insights(50)
@@ -161,13 +165,36 @@ def test_fallback_market_context_from_web():
     assert "https://ex.com/a" in rep["sources"] and "https://ex.com/b" in rep["sources"]
 
 
-def test_fallback_no_positions_means_no_trade():
+def test_fallback_trade_rebalances_into_spy_without_a_trimmable_long():
     from app.agent.fallback import build_fallback_report
 
+    # concentration is high (0.61) but nothing is held -> buy 1 SPY to rebalance
     rep = build_fallback_report(dict(COMPARE), [], [], [])
-    assert rep["proposed_trades"] == []          # positions were not supplied
+    assert rep["proposed_trades"][0]["symbol"] == "SPY"
+    assert rep["proposed_trades"][0]["side"] == "BUY" and rep["proposed_trades"][0]["qty"] == 1
+
+    # an NVDA long exists -> trim 25% of it instead
     rep2 = build_fallback_report({**COMPARE, "_positions": POSITIONS}, [], [], [])
-    assert rep2["proposed_trades"][0]["symbol"] == "NVDA"
+    assert rep2["proposed_trades"][0] == {
+        **rep2["proposed_trades"][0], "symbol": "NVDA", "side": "SELL", "qty": 3.0}
+
+    # low concentration -> no trade at all
+    low = {**COMPARE, "b": {**COMPARE["b"], "concentration_top_share": 0.2},
+           "_positions": POSITIONS}
+    assert build_fallback_report(low, [], [], [])["proposed_trades"] == []
+
+
+def test_fallback_headline_prefers_the_underlying_driver():
+    from app.agent.fallback import build_fallback_report
+
+    lots = {"NVDA": [{"lot_id": f"lot_{i}", "strategy_tag": "earnings", "asset_type": "option"}
+                     for i in range(1, 4)]}
+    rep = build_fallback_report({**COMPARE, "_lots_by_driver": lots}, [], [], [])
+    assert "NVDA earnings-week calls" in rep["headline"]
+    assert "3 lots" in rep["headline"]
+    assert "option" not in rep["headline"].split("driven by")[1].split("(")[0]
+    # the asset_type driver still shows up in `why`
+    assert any("option" in w for w in rep["why"])
 
 
 # --------------------------------------------------------------------------- llm json
@@ -335,3 +362,276 @@ def test_sse_replays_for_late_subscriber(fake_analytics):
     replay = asyncio.run(collect())
     assert replay[-1]["type"] == "final"
     assert len(replay) == len(bus.events(run_id))
+
+
+# --------------------------------------------------------------------------- narrative layer
+def _narrative_llm(monkeypatch, payload, *, latency_ms=4000, error=None):
+    """Point the LLM client at a canned narrative response."""
+    from app.config import settings
+    from app.integrations import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod.llm, "available", lambda: True)
+    object.__setattr__(settings, "llm_model", "local")
+    calls: list[tuple[str, str, int, float]] = []
+
+    def fake_chat_json(system, user, max_tokens=1500, temperature=0.2):
+        calls.append((system, user, max_tokens, temperature))
+        meta = {"model": "local", "latency_ms": latency_ms, "tokens_in": 700,
+                "tokens_out": 90, "raw_text": json.dumps(payload or {}), "error": error}
+        return payload, meta
+
+    monkeypatch.setattr(llm_mod.llm, "chat_json", fake_chat_json)
+    return calls
+
+
+def test_narrative_layer_merges_over_deterministic_report(fake_analytics, monkeypatch):
+    from app.agent.runner import run_analysis
+    from app.db import get_conn, now_iso
+
+    narrative = {
+        "headline": "P&L fell 63% on NVDA earnings-week calls, amplified by over-trading",
+        "why": ["Three NVDA call lots expired near-worthless (lot_1, lot_2, lot_3)",
+                "Hold time collapsed so winners were cut early"],
+        "behaviour": ["Trade count +86% while win rate fell to 41%"],
+        "market_context": ["Nasdaq sold off in July [source: https://ex.com/a]"],
+        "company_changes": [{"symbol": "NVDA", "text": "Guided Q3 below consensus."}],
+    }
+    calls = _narrative_llm(monkeypatch, narrative)
+
+    run_id = "r_narr"
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            (run_id, now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    report = asyncio.run(run_analysis(run_id, "2026-06", "2026-07", None))
+
+    # the prose came from the model ...
+    assert report["headline"] == narrative["headline"]
+    assert report["why"] == narrative["why"]
+    assert report["behaviour"] == narrative["behaviour"]
+    assert report["market_context"] == narrative["market_context"]
+    assert report["confidence"] == 0.75
+    # ... while every computed field stayed with the engine
+    assert len(report["advisements"]) >= 3
+    assert report["drivers"][0]["name"] == "NVDA"
+    assert report["what_changed"][0].startswith("Realized P&L fell")
+    # the engine's paper trade survives the merge untouched
+    assert report["proposed_trades"][0]["symbol"] == "NVDA"
+    assert report["proposed_trades"][0]["side"] == "SELL" and report["proposed_trades"][0]["qty"] == 3.0
+
+    # ONE call, small prompt, small completion, no retry budget
+    assert len(calls) == 1
+    system, user, max_tokens, temperature = calls[0]
+    assert max_tokens == 320 and temperature == 0.2
+    assert len(user) <= 3000, len(user)
+    assert "under 120 words" in system.lower()
+
+    with get_conn() as conn:
+        row = dict(conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone())
+    assert row["status"] == "done" and row["model"] == "local"
+
+
+def test_narrative_failure_keeps_the_deterministic_report(fake_analytics, monkeypatch):
+    from app.agent.events import bus
+    from app.agent.runner import run_analysis
+    from app.db import get_conn, now_iso
+
+    _narrative_llm(monkeypatch, None, latency_ms=150_000, error="llm_unavailable: Request timed out.")
+
+    run_id = "r_narr_fail"
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            (run_id, now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    report = asyncio.run(run_analysis(run_id, "2026-06", "2026-07", None))
+
+    assert "NVDA" in report["headline"] and report["confidence"] == 0.6
+    final = [e for e in bus.events(run_id) if e["type"] == "final"][0]
+    assert final["fallback"] is True
+    msgs = [e.get("message", "") for e in bus.events(run_id) if e["type"] == "status"]
+    assert any("Narrative layer fallback (150 s)" in m for m in msgs), msgs
+
+
+def test_narrative_prompt_stays_within_budget():
+    from app.agent.prompts import build_narrative_message
+
+    big = {**COMPARE, "facts": [f"A very long generated fact sentence number {i}. " * 6 for i in range(40)]}
+    msg = build_narrative_message(
+        period_a="2026-06", period_b="2026-07", compare=big,
+        prior_insights=[{"text": "x" * 500}] * 10, context_insights=[{"text": "y" * 500}] * 10,
+        macro=[{"title": "t" * 200, "url": "https://e.com", "content": "c" * 900}] * 6,
+        company=[{"symbol": "NVDA", "text": "z" * 900}] * 5,
+        question="q" * 400,
+    )
+    assert len(msg) <= 3000
+    assert msg.endswith("Return ONLY the JSON object. Under 120 words.")
+
+
+def test_merge_narrative_rejects_junk():
+    from app.agent.runner import _merge_narrative
+
+    base = {"headline": "engine", "why": ["engine why"], "behaviour": [], "what_changed": [],
+            "drivers": [], "advisements": [], "proposed_trades": [], "prior_insight_review": [],
+            "confidence": 0.6, "sources": [], "market_context": [], "company_changes": []}
+    assert _merge_narrative(dict(base), None) is False
+    assert _merge_narrative(dict(base), {}) is False
+    assert _merge_narrative(dict(base), {"headline": "   "}) is False   # nothing usable
+    rep = dict(base)
+    assert _merge_narrative(rep, {"headline": "model wrote this"}) is True
+    assert rep["headline"] == "model wrote this" and rep["confidence"] == 0.75
+
+
+# --------------------------------------------------------------------------- company context
+def _enable_tavily(monkeypatch, results_by_query):
+    from app.config import settings
+    from app.integrations import tavily as tavily_mod
+
+    object.__setattr__(settings, "tavily_api_key", "tv-test")
+    seen: list[str] = []
+
+    def fake_search(query, max_results=5):
+        seen.append(query)
+        return results_by_query.get(query.split()[0], [])[:max_results]
+
+    monkeypatch.setattr(tavily_mod, "web_search", fake_search)
+    return seen
+
+
+def test_company_context_populates_report_and_memory(fake_analytics, monkeypatch):
+    from app.agent import memory
+    from app.agent.events import bus
+    from app.agent.runner import run_analysis
+    from app.db import get_conn, now_iso
+
+    results = {
+        "NVDA": [{"title": "NVDA guides Q3 below consensus", "url": "https://n.com/1",
+                  "content": "Nvidia said data-centre revenue would grow slower. " * 6},
+                 {"title": "NVDA falls 8%", "url": "https://n.com/2", "content": "shares fell"}],
+        "TSLA": [{"title": "TSLA deliveries miss", "url": "https://t.com/1", "content": "deliveries missed"}],
+        "option": [], "stock": [], "Federal": [], "earnings": [],
+    }
+    seen = _enable_tavily(monkeypatch, results)
+    _narrative_llm(monkeypatch, {"headline": "narrated", "company_changes": [
+        {"symbol": "NVDA", "text": "Cut its Q3 outlook, and the calls never recovered."}]})
+
+    run_id = "r_company"
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            (run_id, now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    report = asyncio.run(run_analysis(run_id, "2026-06", "2026-07", None))
+
+    assert any("NVDA stock July 2026 earnings guidance news" == q for q in seen), seen
+    by_sym = {c["symbol"]: c for c in report["company_changes"]}
+    assert set(by_sym) == {"NVDA", "TSLA"}
+    # the model rewrote NVDA's prose; sources stay engine-supplied
+    assert by_sym["NVDA"]["text"] == "Cut its Q3 outlook, and the calls never recovered."
+    assert by_sym["NVDA"]["sources"] == ["https://n.com/1", "https://n.com/2"]
+    # TSLA keeps the deterministic title + snippet
+    assert by_sym["TSLA"]["text"].startswith("TSLA deliveries miss —")
+    assert "https://n.com/1" in report["sources"]
+
+    # traced + streamed
+    names = [e["name"] for e in bus.events(run_id) if e["type"] == "tool_call"]
+    assert "company_context" in names
+
+    # persisted as `context` insights for the next run
+    ctx = [i for i in memory.recall_insights(100) if i["kind"] == "context"]
+    assert {i["text"].split()[0] for i in ctx} == {"NVDA", "TSLA"}
+    assert all(i["text"].split()[1].startswith("2026-07:") for i in ctx)
+    assert ctx[0]["evidence"], "sources should be stored as evidence"
+
+    # a second run must not duplicate identical context
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            ("r_company2", now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    asyncio.run(run_analysis("r_company2", "2026-06", "2026-07", None))
+    ctx2 = [i for i in memory.recall_insights(200) if i["kind"] == "context"]
+    assert len(ctx2) == len(ctx)
+
+
+def test_no_tavily_key_skips_company_context(fake_analytics):
+    from app.agent.events import bus
+    from app.agent.runner import run_analysis
+    from app.db import get_conn, now_iso
+
+    run_id = "r_notavily"
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            (run_id, now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    report = asyncio.run(run_analysis(run_id, "2026-06", "2026-07", None))
+
+    assert report["company_changes"] == [] and report["market_context"] == []
+    msgs = [e.get("message", "") for e in bus.events(run_id) if e["type"] == "status"]
+    assert "Tavily key not set — skipping company context" in msgs
+    assert "Tavily key not set — skipping market context" in msgs
+    names = [e["name"] for e in bus.events(run_id) if e["type"] == "tool_call"]
+    assert "company_context" not in names
+
+
+def test_known_business_context_reaches_the_prompt(fake_analytics, monkeypatch):
+    from app.agent import memory
+    from app.agent.runner import run_analysis
+    from app.db import get_conn, now_iso
+
+    memory.save_insight("r_prev", "context", "NVDA 2026-06: guided Q2 above consensus", ["https://n.com/0"])
+    calls = _narrative_llm(monkeypatch, {"headline": "h"})
+
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, created_at, period_a, period_b, question, status) VALUES (?,?,?,?,?,?)",
+            ("r_ctx", now_iso(), "2026-06", "2026-07", "", "running"),
+        )
+    asyncio.run(run_analysis("r_ctx", "2026-06", "2026-07", None))
+
+    user = calls[0][1]
+    assert "KNOWN BUSINESS CONTEXT" in user
+    assert "guided Q2 above consensus" in user
+
+
+# --------------------------------------------------------------------------- retry policy
+def test_no_json_retry_after_a_slow_first_call(monkeypatch):
+    """A nudge costs a whole second generation — never spend it when the first call was slow."""
+    import time as _time
+
+    from app.config import settings
+    from app.integrations import llm as llm_mod
+
+    object.__setattr__(settings, "llm_base_url", "http://x/v1")
+    object.__setattr__(settings, "llm_model", "local")
+    object.__setattr__(settings, "llm_timeout_s", 150.0)
+    calls = {"n": 0}
+
+    class _Msg:
+        content = "not json at all"
+
+    class _Resp:
+        choices = [type("C", (), {"message": _Msg()})()]
+        usage = None
+        model = "local"
+
+    def slow_call(self, messages, max_tokens, temperature, json_mode):
+        calls["n"] += 1
+        _time.sleep(0.01)
+        return _Resp()
+
+    monkeypatch.setattr(llm_mod.LLMClient, "_call", slow_call)
+    monkeypatch.setattr(llm_mod.llm, "_client", object())          # skip real client construction
+
+    # fast first call (0.01s of a 150s budget) -> the nudge is worth it
+    parsed, meta = llm_mod.llm.chat_json("s", "u")
+    assert parsed is None and calls["n"] == 2
+
+    # the same call against a 0.001s budget is "slow" -> no nudge
+    calls["n"] = 0
+    object.__setattr__(settings, "llm_timeout_s", 0.001)
+    parsed, meta = llm_mod.llm.chat_json("s", "u")
+    assert parsed is None and calls["n"] == 1
+    object.__setattr__(settings, "llm_timeout_s", 150.0)

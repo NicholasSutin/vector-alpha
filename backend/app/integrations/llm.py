@@ -153,7 +153,16 @@ class LLMClient:
         meta["raw_text"] = text
         parsed = extract_json(text)
 
-        if parsed is None:
+        # A nudge costs another full generation. On a slow local endpoint that guarantees a
+        # timeout, so only retry when the first call came back comfortably fast AND the failure
+        # was a parse failure (never a timeout / transport error).
+        elapsed = time.perf_counter() - t0
+        may_retry = (
+            parsed is None
+            and meta["error"] is None
+            and elapsed < 0.6 * float(settings.llm_timeout_s)
+        )
+        if may_retry:
             # one nudge: "return ONLY valid JSON"
             try:
                 nudge = messages + [

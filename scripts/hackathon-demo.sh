@@ -44,7 +44,9 @@ fi
 # ---------- 2. IBKR gateway (paper) ----------
 IBKR_STARTED=0
 if [ "${DEMO_IBKR:-auto}" != "0" ] && { [ "${DEMO_IBKR:-auto}" = "1" ] || [ -d "$ROOT/ibkr-gateway" ]; }; then
-  if [ -x "$ROOT/scripts/ibkr-gateway.sh" ]; then
+  if lsof -nP -iTCP:5001 -sTCP:LISTEN >/dev/null 2>&1; then
+    ok "IBKR gateway already listening on :5001"; IBKR_STARTED=1
+  elif [ -x "$ROOT/scripts/ibkr-gateway.sh" ]; then
     say "starting IBKR Client Portal Gateway on :5001 (log: .demo-logs/ibkr.log)"
     ( "$ROOT/scripts/ibkr-gateway.sh" >"$LOGS/ibkr.log" 2>&1 ) & PIDS+=($!)
     IBKR_STARTED=1

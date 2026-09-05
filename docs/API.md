@@ -146,3 +146,10 @@ type Order = {
 ```
 `GET /brokers/ibkr/orders` refreshes status/fill/mark from the gateway when reachable (never throws; stale values otherwise).
 When an order fills, the broker module also inserts the fill as a `transactions` row (source `ibkr_live`, external_id = broker_order_id) so the next agent run sees it.
+
+## Addendum (14:02) — company changes + fast LLM layer
+`Report.company_changes: { symbol, text, sources[] }[]` (default `[]`): for each top-driver underlying, what changed at the
+company during period B (earnings, guidance, product/news, price move) from Tavily, summarised by the model when available.
+These are also saved as insights with `kind: "context"` so later runs recall business context ("build intuition over runs").
+The LLM step now produces only a compact narrative layer (`headline`, `why`, `market_context`, `company_changes[].text`,
+`behaviour`) merged over the deterministic report (facts, drivers, advisements, trades, prior review stay engine-computed).

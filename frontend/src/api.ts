@@ -188,6 +188,8 @@ export type Report = {
   why: string[];
   /** Optional macro/news framing; bullets may end with a "[source: https://...]" tag. */
   market_context?: string[];
+  /** Per top-driver company context (earnings, guidance, price move) from Tavily. */
+  company_changes?: { symbol: string; text: string; sources: string[] }[];
   drivers: { name: string; contribution_pct: number; detail: string; evidence: string[] }[];
   behaviour: string[];
   advisements: {

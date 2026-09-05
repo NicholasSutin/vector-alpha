@@ -5,6 +5,7 @@ from app.analytics.ledger import match_lots
 from app.analytics.periods import all_period_summaries, list_periods, summarize_period
 from app.analytics.positions import current_positions
 from app.analytics.variance import compare_periods, facts_for_period
+from app.ingest.account_summary_csv import parse_account_summary_csv
 from app.ingest.generic_csv import detect_source, parse_generic_csv
 from app.ingest.ibkr_flex_csv import parse_ibkr_flex_csv
 from app.ingest.normalize import option_symbol, parse_money, to_iso_date
@@ -200,7 +201,9 @@ def test_ibkr_flex_parser():
 
     lots = match_lots(txns)
     assert len(lots) == 2                                     # AAPL + NVDA round trips
-    assert round(sum(l["realized_pnl"] for l in lots), 2) == round(775.5 + 266.1, 2)
+    # AAPL: 1982.50 − 1905.00 − 2.00 commission = 75.50; NVDA: 1530 − 1260 − 3.90 = 266.10
+    assert round(sum(l["realized_pnl"] for l in lots), 2) == round(75.5 + 266.1, 2)
+    assert {l["realized_pnl"] for l in lots} == {75.5, 266.1}
 
 
 def test_generic_parser_and_detection():
@@ -214,6 +217,65 @@ def test_generic_parser_and_detection():
     assert len(txns) == 2 and txns[0]["underlying"] == "MSFT"
     lots = match_lots(txns)
     assert len(lots) == 1 and lots[0]["realized_pnl"] == 74.97
+
+
+SUMMARY_CSV = """period,account_id,equity,cash,deposits,withdrawals,fees,dividends,interest
+2026-06,DEMO-1,"$42,056.58","$8,120.00","$2,750.00",0,$44.37,59.80,7.15
+2026-07,DEMO-1,"$43,872.76","$9,004.11","$2,750.00",(500.00),$123.75,0,7.30
+2026-08,DEMO-1,"$45,553.66","$16,749.77","$800.00",(1200.00),$26.09,24.10,8.05
+"""
+
+
+def test_account_summary_parser():
+    assert detect_source(SUMMARY_CSV) == "account_summary"
+    snaps, txns = parse_account_summary_csv(SUMMARY_CSV)
+
+    assert len(snaps) == 3
+    assert [s["as_of"] for s in snaps] == ["2026-06-30T20:00:00", "2026-07-31T20:00:00",
+                                          "2026-08-31T20:00:00"]          # YYYY-MM -> month end
+    assert all(s["source"] == "account_summary" and s["id"].startswith("sum:") for s in snaps)
+    assert all(s["account_id"] == "DEMO-1" and s["positions_json"] == "[]" for s in snaps)
+    assert snaps[0]["equity"] == 42056.58 and snaps[0]["cash"] == 8120.0
+    assert len({s["id"] for s in snaps}) == 3
+
+    kinds = {}
+    for t in txns:
+        kinds.setdefault(t["asset_type"], []).append(t)
+    assert {"transfer", "fee", "dividend", "interest"} <= set(kinds)
+    assert sorted(t["amount"] for t in kinds["transfer"]) == [-1200.0, -500.0, 800.0, 2750.0, 2750.0]
+    jul_fee = next(t for t in kinds["fee"] if t["ts"].startswith("2026-07"))
+    assert jul_fee["amount"] == -123.75 and jul_fee["fees"] == 123.75   # fees positive, amount signed
+    assert all(t["source"] == "account_summary" for t in txns)
+    assert all(t["side"] == "none" for t in txns)
+    # a zero-valued column emits nothing
+    assert not [t for t in kinds["dividend"] if t["ts"].startswith("2026-07")]
+
+    # the snapshot equity flows straight through to PeriodSummary.ending_equity
+    lots = match_lots(txns)
+    jul = summarize_period("2026-07", txns, lots, snaps)
+    assert jul["ending_equity"] == 43872.76 and jul["ending_cash"] == 9004.11
+    assert jul["net_deposits"] == 2250.0 and jul["fees"] == 123.75
+    assert jul["interest"] == 7.30
+
+
+def test_fee_rows_are_not_double_counted():
+    """A `fee` row carrying the charge in BOTH `amount` and `fees` counts once."""
+    txns = [
+        _t(id="f1", ts="2026-01-02T08:00:00", asset_type="fee", amount=-5.0, fees=5.0,
+           description="Gold subscription fee"),
+        _t(id="f2", ts="2026-01-03T08:00:00", asset_type="fee", amount=-2.5,
+           description="fee, amount only"),
+        _t(id="b1", ts="2026-01-05T10:00:00", symbol="AAPL", side="buy", open_close="open",
+           qty=1, price=100, fees=0.25, amount=-100),
+    ]
+    assert summarize_period("2026-01", txns, [])["fees"] == 7.75
+
+
+def test_account_summary_parser_rejects_other_files():
+    import pytest
+    with pytest.raises(ValueError):
+        parse_account_summary_csv("ts,symbol,qty\n2026-01-01,AAPL,1\n")
+    assert parse_account_summary_csv("") == ([], [])
 
 
 # --------------------------------------------------------------- the story
@@ -269,6 +331,28 @@ def test_synthetic_book_tells_the_july_story():
     assert any(t["asset_type"] == "transfer" and t["amount"] > 0 for t in txns)
 
 
+def test_synthetic_leaves_open_positions_to_act_on():
+    from app.ingest.synthetic import generate_synthetic_snapshots
+    txns = generate_synthetic_book()
+    snaps = generate_synthetic_snapshots(txns)
+    assert len(snaps) == 8 and all(s["equity"] for s in snaps)
+
+    pos = {p["symbol"]: p for p in current_positions(txns, snaps)}
+    assert {"AAPL", "MSFT", "SPY", "NVDA"} <= set(pos)
+    assert any(p["asset_type"] == "option" for p in pos.values())
+    assert pos["AAPL"]["qty"] == 10 and pos["MSFT"]["qty"] == 5 and pos["SPY"]["qty"] == 8
+    assert pos["NVDA"]["qty"] == 6
+    assert all(p["avg_cost"] > 0 for p in pos.values())
+    # the lingering NVDA long is the underwater one the advisement can act on
+    assert pos["NVDA"]["unrealized_pnl"] < 0
+    assert all(p["market_value"] is not None for p in pos.values())
+
+    # month-end snapshots carry marked positions once anything is left open
+    import json
+    assert json.loads(snaps[-1]["positions_json"])
+    assert json.loads(snaps[0]["positions_json"]) == []      # flat in January
+
+
 def test_variance_blames_nvda_earnings():
     txns = generate_synthetic_book()
     lots = match_lots(txns)
@@ -310,12 +394,17 @@ def test_variance_blames_nvda_earnings():
 # --------------------------------------------------------------- routes
 
 def _client():
+    """TestClient over the real app. conftest's autouse `_clean_db` gives each test
+    an empty database; the service cache is keyed on the transaction set so it
+    invalidates itself, but be explicit about it."""
     from fastapi.testclient import TestClient
+    from app.analytics import service
     from app.main import app
+    service.invalidate_cache()
     return TestClient(app)
 
 
-def test_routes_end_to_end(clean_db):
+def test_routes_end_to_end():
     client = _client()
 
     empty = client.get("/api/portfolio/overview")
@@ -362,6 +451,8 @@ def test_routes_end_to_end(clean_db):
     assert len(ov["equity_curve"]) == 8
     assert ov["equity_curve"][-1]["period"] == "2026-08"
     assert ov["sources"][0]["source"] == "synthetic"
+    assert len(ov["positions"]) >= 5
+    assert any(p["symbol"] == "NVDA" and p["unrealized_pnl"] < 0 for p in ov["positions"])
 
     perf = client.get("/api/performance")
     assert perf.status_code == 200, perf.text
@@ -386,7 +477,32 @@ def test_routes_end_to_end(clean_db):
     assert all(l["close_ts"][:7] == "2026-07" for l in got)
 
 
-def test_csv_upload_route(clean_db):
+def test_account_summary_upload_route():
+    client = _client()
+    res = client.post("/api/ingest/csv",
+                      files={"file": ("statement.csv", SUMMARY_CSV, "text/csv")})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["source"] == "account_summary"
+    assert body["account_ids"] == ["DEMO-1"]
+    assert body["inserted"] == 13              # 5 transfers + 3 fees + 2 divs + 3 interest
+    assert any("3 monthly snapshots loaded" in w for w in body["warnings"])
+    assert body["date_range"] == {"start": "2026-06-30", "end": "2026-08-31"}
+
+    jul = client.get("/api/periods/2026-07")
+    assert jul.status_code == 200
+    assert jul.json()["ending_equity"] == 43872.76
+    assert jul.json()["ending_cash"] == 9004.11
+
+    # explicit source= also works, and re-uploading is idempotent on the snapshots
+    again = client.post("/api/ingest/csv", data={"source": "account_summary"},
+                        files={"file": ("statement.csv", SUMMARY_CSV, "text/csv")}).json()
+    assert again["source"] == "account_summary"
+    assert again["skipped_duplicates"] == 13
+    assert any("0 monthly snapshots loaded" in w for w in again["warnings"])
+
+
+def test_csv_upload_route():
     client = _client()
     res = client.post("/api/ingest/csv", files={"file": ("activity.csv", RH_CSV, "text/csv")})
     assert res.status_code == 200, res.text

@@ -8,7 +8,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.analytics import service
 from app.db import get_conn, init_db, reset_all
-from app.ingest import generic_csv, ibkr_flex_csv, robinhood_csv, synthetic
+from app.ingest import (account_summary_csv, generic_csv, ibkr_flex_csv,
+                        robinhood_csv, synthetic)
 from app.ingest.normalize import strip_bom, summarize_ingest
 from app.models import IngestResult
 
@@ -19,7 +20,26 @@ _PARSERS = {
     "robinhood": ("robinhood_csv", lambda text: robinhood_csv.parse_robinhood_activity_csv(text)),
     "ibkr_flex": ("ibkr_flex", lambda text: ibkr_flex_csv.parse_ibkr_flex_csv(text)),
     "generic": ("generic_csv", lambda text: generic_csv.parse_generic_csv(text)),
+    "account_summary": (account_summary_csv.SOURCE, None),   # handled separately, see below
 }
+
+
+def insert_snapshots(snapshots: list[dict[str, Any]]) -> int:
+    """INSERT OR IGNORE snapshot rows; returns how many landed."""
+    if not snapshots:
+        return 0
+    written = 0
+    with get_conn() as conn:
+        for s in snapshots:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO snapshots (id, source, account_id, as_of, equity, cash,"
+                " positions_json) VALUES (?,?,?,?,?,?,?)",
+                (s["id"], s["source"], s.get("account_id", ""), s["as_of"], s.get("equity"),
+                 s.get("cash"), s.get("positions_json", "[]")),
+            )
+            written += cur.rowcount or 0
+    service.invalidate_cache()
+    return written
 
 
 def _result(source: str, txns: list[dict[str, Any]], inserted: int, skipped: int,
@@ -53,6 +73,28 @@ async def ingest_csv(file: UploadFile = File(...), source: Optional[str] = Form(
         warnings.append(f"auto-detected source: {chosen}")
 
     src_name, parse = _PARSERS[chosen]
+
+    # Monthly account summaries produce snapshots as well as transactions.
+    if chosen == "account_summary":
+        try:
+            snapshots, txns = account_summary_csv.parse_account_summary_csv(text)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse account summary: {exc}") from exc
+        if not snapshots:
+            raise HTTPException(status_code=400, detail="No usable account-summary rows found.")
+        loaded = insert_snapshots(snapshots)
+        inserted, skipped = _insert(txns) if txns else (0, 0)
+        warnings.append(f"{loaded} monthly snapshots loaded")
+        if skipped:
+            warnings.append(f"{skipped} duplicate rows skipped")
+        result = _result(src_name, txns, inserted, skipped, warnings)
+        if not result.account_ids:
+            result.account_ids = sorted({s["account_id"] for s in snapshots if s.get("account_id")})
+        if not result.date_range.get("start"):
+            result.date_range = {"start": snapshots[0]["as_of"][:10],
+                                 "end": snapshots[-1]["as_of"][:10]}
+        return result
+
     try:
         txns = parse(text)
     except ValueError as exc:

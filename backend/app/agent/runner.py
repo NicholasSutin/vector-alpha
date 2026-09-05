@@ -18,7 +18,7 @@ from typing import Any, Callable
 from app.agent import fallback as fallback_mod
 from app.agent import memory
 from app.agent.events import bus
-from app.agent.prompts import SYSTEM_PROMPT, build_user_message
+from app.agent.prompts import NARRATIVE_SYSTEM_PROMPT, build_narrative_message
 from app.config import settings
 from app.db import get_conn, now_iso
 from app.integrations.llm import llm
@@ -37,13 +37,6 @@ def _month_name(period: str) -> str:
         return f"{MONTHS[int(m) - 1]} {y}"
     except Exception:
         return period
-
-
-def _max_tokens() -> int:
-    """Small local endpoints run ~8 tok/s on one slot, so an over-long budget guarantees a
-    timeout. Size the completion to comfortably fit inside settings.llm_timeout_s."""
-    budget = int(max(1.0, settings.llm_timeout_s - 25) * 8)
-    return max(400, min(1500, budget))
 
 
 def _summarize(value: Any, limit: int = 300) -> str:
@@ -140,6 +133,95 @@ def _persist_run(run_id: str, **fields: Any) -> None:
         conn.execute(f"UPDATE runs SET {cols} WHERE id=?", (*fields.values(), run_id))
 
 
+def _slist(v: Any) -> list[str]:
+    """Coerce whatever a small model produced into a list of strings."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    out = []
+    for x in v if isinstance(v, list) else [v]:
+        if isinstance(x, str):
+            out.append(x)
+        elif isinstance(x, dict):
+            out.append(str(x.get("text") or x.get("detail") or x.get("title") or json.dumps(x, default=str)))
+        else:
+            out.append(str(x))
+    return out
+
+
+def _merge_narrative(report: dict[str, Any], narrative: dict[str, Any] | None) -> bool:
+    """Overlay the model's prose on the engine-computed report, IN PLACE.
+
+    Only the narrative fields move; what_changed, drivers, advisements, proposed_trades and
+    prior_insight_review stay exactly as the deterministic engine computed them.
+    Returns True when the merge produced a valid Report.
+    """
+    if not isinstance(narrative, dict):
+        return False
+    candidate = dict(report)
+
+    headline = narrative.get("headline")
+    if isinstance(headline, str) and headline.strip():
+        candidate["headline"] = headline.strip()
+
+    for field in ("why", "behaviour", "market_context"):
+        vals = [v for v in _slist(narrative.get(field)) if v.strip()]
+        if vals:
+            candidate[field] = vals
+
+    # the model may rewrite the prose of a company change, never its symbol or sources
+    rewritten: dict[str, str] = {}
+    for c in narrative.get("company_changes") or []:
+        if isinstance(c, dict) and c.get("symbol") and isinstance(c.get("text"), str):
+            rewritten[str(c["symbol"]).upper()] = c["text"].strip()
+    if rewritten:
+        merged_cc = []
+        for c in candidate.get("company_changes") or []:
+            c = dict(c)
+            new_text = rewritten.get(str(c.get("symbol", "")).upper())
+            if new_text:
+                c["text"] = new_text
+            merged_cc.append(c)
+        candidate["company_changes"] = merged_cc
+
+    if candidate.get("headline") == report.get("headline") and candidate.get("why") == report.get("why"):
+        return False                      # the model added nothing usable
+
+    candidate["confidence"] = 0.75
+    validated, ok = _coerce_report(candidate, report)
+    if not ok:
+        return False
+    report.clear()
+    report.update(validated)
+    return True
+
+
+def _save_company_context(run_id: str, period_b: str, changes: list[dict[str, Any]]) -> int:
+    """Persist company context as `context` insights so later runs inherit the business story.
+    Deduped on symbol+period+text."""
+    saved = 0
+    try:
+        existing = {i.get("text") for i in memory.recall_insights(200) if i.get("kind") == "context"}
+    except Exception:
+        existing = set()
+    for c in changes:
+        sym = str(c.get("symbol", "")).strip()
+        text = str(c.get("text", "")).strip()
+        if not sym or not text:
+            continue
+        line = f"{sym} {period_b}: {text}"[:800]
+        if line in existing:
+            continue
+        try:
+            memory.save_insight(run_id, "context", line, list(c.get("sources") or []))
+            existing.add(line)
+            saved += 1
+        except Exception as e:
+            log.warning("saving company context failed: %s", e)
+    return saved
+
+
 def _coerce_report(raw: dict[str, Any], fb: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Validate an LLM dict against models.Report; coerce common small-model slips.
     Returns (report_dict, ok)."""
@@ -168,24 +250,16 @@ def _coerce_report(raw: dict[str, Any], fb: dict[str, Any]) -> tuple[dict[str, A
         if src in d and dst not in d:
             d[dst] = d.pop(src)
 
-    def _slist(v: Any) -> list[str]:
-        if v is None:
-            return []
-        if isinstance(v, str):
-            return [v]
-        out = []
-        for x in v if isinstance(v, list) else [v]:
-            if isinstance(x, str):
-                out.append(x)
-            elif isinstance(x, dict):
-                out.append(str(x.get("text") or x.get("detail") or x.get("title") or json.dumps(x, default=str)))
-            else:
-                out.append(str(x))
-        return out
-
     d["headline"] = str(d.get("headline") or fb.get("headline") or "Period comparison")
     for k in ("what_changed", "why", "behaviour", "sources", "market_context"):
         d[k] = _slist(d.get(k))
+
+    cc = []
+    for x in (d.get("company_changes") or []):
+        if isinstance(x, dict) and x.get("symbol"):
+            cc.append({"symbol": str(x["symbol"]), "text": str(x.get("text") or ""),
+                       "sources": _slist(x.get("sources"))})
+    d["company_changes"] = cc
 
     # drivers
     dv = []
@@ -370,39 +444,78 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
         else:
             _status(run_id, "Tavily key not set — skipping market context")
 
-        # ---- deterministic fallback is always built (safety net + coercion base) ----
+        # ---- company context: what changed at the top driver companies ----
+        company: list[dict[str, Any]] = []
+        if settings.has_tavily and top_keys:
+            from app.integrations.tavily import web_search
+
+            mb = _month_name(b)
+            _status(run_id, f"Researching company changes: {', '.join(top_keys[:3])}")
+            t0 = time.perf_counter()
+            for sym in top_keys[:3]:
+                q = f"{sym} stock {mb} earnings guidance news"
+                res = await asyncio.to_thread(web_search, q, 3) or []
+                if not res:
+                    continue
+                top = res[0]
+                text = f"{str(top.get('title','')).strip()} — {str(top.get('content','')).strip()[:160]}"
+                company.append({
+                    "symbol": sym,
+                    "text": text.strip(" —"),
+                    "sources": [r["url"] for r in res if r.get("url")][:3],
+                })
+            ms = int((time.perf_counter() - t0) * 1000)
+            bus.publish(run_id, {"type": "tool_call", "name": "company_context",
+                                 "input": {"symbols": top_keys[:3], "month": mb, "max_results": 3}})
+            bus.publish(run_id, {"type": "tool_result", "name": "company_context",
+                                 "summary": f"{len(company)} companies: "
+                                            f"{', '.join(c['symbol'] for c in company)}"[:300]})
+            traj.add(step_type="tool_call", label="company_context", tool_name="company_context",
+                     input_summary={"symbols": top_keys[:3]}, duration_ms=ms,
+                     output_summary=_summarize([c["symbol"] for c in company], 200))
+        elif not settings.has_tavily:
+            _status(run_id, "Tavily key not set — skipping company context")
+
+        # ---- the report is computed deterministically FIRST; the model only narrates it ----
         compare_for_fb = dict(compare)
         compare_for_fb["_positions"] = positions
-        fb = fallback_mod.build_fallback_report(compare_for_fb, prior, web, macro)
+        compare_for_fb["_lots_by_driver"] = lots_by_driver
+        report = fallback_mod.build_fallback_report(compare_for_fb, prior, web, macro)
+        report["company_changes"] = [dict(c) for c in company]
+        for c in company:
+            for u in c.get("sources", []):
+                if u not in report["sources"]:
+                    report["sources"].append(u)
 
-        # ---- LLM reasoning ----
-        user_msg = build_user_message(
-            period_a=a, period_b=b, compare=compare, lots_by_driver=lots_by_driver,
-            positions=positions, prior_insights=prior, web=web, macro=macro, question=question,
+        # ---- narrative layer: ONE small, fast LLM call over the finished numbers ----
+        context_insights = [i for i in prior if i.get("kind") == "context"]
+        advice_insights = [i for i in prior if i.get("kind") != "context"]
+        user_msg = build_narrative_message(
+            period_a=a, period_b=b, compare=compare, prior_insights=advice_insights,
+            context_insights=context_insights, macro=macro, company=company, question=question,
         )
         llm_meta: dict[str, Any] = {}
         if llm.available():
-            _status(run_id, f"Reasoning with {settings.llm_model}")
-            bus.publish(run_id, {"type": "tool_call", "name": "llm_reasoning",
+            _status(run_id, f"Narrative layer from {settings.llm_model}")
+            bus.publish(run_id, {"type": "tool_call", "name": "llm_narrative",
                                  "input": {"model": settings.llm_model, "chars": len(user_msg)}})
             parsed, llm_meta = await asyncio.to_thread(
-                llm.chat_json, SYSTEM_PROMPT, user_msg, _max_tokens(), 0.2
+                llm.chat_json, NARRATIVE_SYSTEM_PROMPT, user_msg, 320, 0.2
             )
             model_used = llm_meta.get("model") or settings.llm_model or "llm"
-            ok = False
-            if parsed:
-                report, ok = _coerce_report(parsed, fb)
-            if ok and report.get("headline"):
+            secs = (llm_meta.get("latency_ms") or 0) / 1000.0
+            merged = _merge_narrative(report, parsed) if parsed else False
+            if merged:
                 used_fallback = False
-                bus.publish(run_id, {"type": "tool_result", "name": "llm_reasoning",
+                _status(run_id, f"Narrative layer from local model ({secs:.0f} s)")
+                bus.publish(run_id, {"type": "tool_result", "name": "llm_narrative",
                                      "summary": str(report.get("headline"))[:300]})
             else:
-                report = fb
                 used_fallback = True
-                bus.publish(run_id, {"type": "tool_result", "name": "llm_reasoning",
-                                     "summary": f"unusable model output ({llm_meta.get('error')}) — deterministic fallback"[:300]})
-                _status(run_id, "Model output unusable — using deterministic narrative")
-            traj.add(step_type="reasoning", label="llm_reasoning", tool_name="llm_reasoning",
+                _status(run_id, f"Narrative layer fallback ({secs:.0f} s) — {llm_meta.get('error')}")
+                bus.publish(run_id, {"type": "tool_result", "name": "llm_narrative",
+                                     "summary": f"unusable model output ({llm_meta.get('error')}) — deterministic narrative"[:300]})
+            traj.add(step_type="reasoning", label="llm_narrative", tool_name="llm_narrative",
                      input_summary={"model": model_used, "prompt_chars": len(user_msg)},
                      output_summary=str(report.get("headline", ""))[:500],
                      duration_ms=int(llm_meta.get("latency_ms") or 0),
@@ -410,7 +523,6 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
                      status="success" if not used_fallback else "error")
         else:
             _status(run_id, "No LLM configured — deterministic narrative")
-            report = fb
             used_fallback = True
             traj.add(step_type="reasoning", label="deterministic_fallback",
                      tool_name="build_fallback_report",
@@ -428,6 +540,7 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
                                     f"{adv.get('title')} — {adv.get('detail')}"[:800],
                                     list(adv.get("evidence") or []))
                 saved += 1
+            saved += _save_company_context(run_id, b, report.get("company_changes") or [])
         except Exception as e:
             log.warning("saving insights failed: %s", e)
         traj.add(step_type="tool_call", label="save_insight", tool_name="save_insight",
@@ -452,7 +565,7 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
             traced_llm = await asyncio.to_thread(
                 lambda: prism.trace_llm(
                     model=model_used,
-                    input_messages=[{"role": "system", "content": SYSTEM_PROMPT[:2000]},
+                    input_messages=[{"role": "system", "content": NARRATIVE_SYSTEM_PROMPT[:2000]},
                                     {"role": "user", "content": user_msg[:8000]}],
                     output=json.dumps(report, default=str)[:8000],
                     latency_ms=int(llm_meta.get("latency_ms") or latency_ms),

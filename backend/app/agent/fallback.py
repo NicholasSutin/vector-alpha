@@ -4,6 +4,7 @@ Same `models.Report` shape as the model path, so the UI and the demo never degra
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -52,6 +53,7 @@ def build_fallback_report(
     flags: list[str] = list(compare.get("behaviour_flags") or [])
     topline: list[dict] = list(compare.get("topline") or [])
     positions: list[dict] = list(compare.get("_positions") or [])
+    lots_by_driver: dict[str, list[dict]] = dict(compare.get("_lots_by_driver") or {})
 
     pa = _get(sa, "period", "A")
     pb = _get(sb, "period", "B")
@@ -60,7 +62,11 @@ def build_fallback_report(
     pnl = _topline(compare, "realized_pnl")
     if pnl is None and topline:
         pnl = max(topline, key=lambda t: abs(float(_get(t, "delta", 0))))
-    top_driver = drivers[0] if drivers else None
+    # The headline names a TRADED NAME, not an asset class: "NVDA earnings-week calls" reads as
+    # a cause, "option (103% of the move)" reads as a category. Asset-type drivers go in `why`.
+    top_driver = next((d for d in drivers if d.get("dimension") == "underlying"), None)
+    if top_driver is None:
+        top_driver = drivers[0] if drivers else None
 
     if pnl is not None:
         direction = "fell" if float(_get(pnl, "delta", 0)) < 0 else "rose"
@@ -74,10 +80,23 @@ def build_fallback_report(
     else:
         head = f"Period {pb} vs {pa}"
     if top_driver:
+        key = str(top_driver.get("key", ""))
+        ev_lots = list(top_driver.get("evidence_lot_ids") or [])
+        detail_lots = lots_by_driver.get(key) or []
+        # count the driver's own lots closed in period b
+        n_lots = len(detail_lots) if detail_lots else len(ev_lots)
+        tags = {str(l.get("strategy_tag") or "").strip() for l in detail_lots}
+        tags.discard("")
+        kinds = {str(l.get("asset_type") or "").strip() for l in detail_lots}
+        label = key
+        if len(tags) == 1:
+            tag = tags.pop()
+            noun = "calls" if kinds == {"option"} else "trades"
+            label = f"{key} {tag}-week {noun}" if tag == "earnings" else f"{key} {tag} {noun}"
         head += (
-            f", primarily driven by {top_driver.get('key')} "
+            f", primarily driven by {label} "
             f"({_pct(_get(top_driver, 'contribution_pct', 0))} of the move, "
-            f"{len(top_driver.get('evidence_lot_ids') or [])} lots)"
+            f"{n_lots} lot{'' if n_lots == 1 else 's'})"
         )
     if flags:
         head += f", amplified by {flags[0]}"
@@ -230,23 +249,38 @@ def build_fallback_report(
 
     # ---------------- proposed trades (at most one, from concentration) ----------------
     proposed: list[dict] = []
-    if conc_b > 0.4 and top_sym:
+    if conc_b > 0.4:
         held = None
         for p in positions:
-            if str(p.get("symbol", "")).upper() == top_sym.upper() and float(_get(p, "qty", 0)) > 0:
+            same = (str(p.get("symbol", "")).upper() == top_sym.upper()
+                    or str(p.get("underlying", "")).upper() == top_sym.upper())
+            if top_sym and same and float(_get(p, "qty", 0)) > 0 and p.get("asset_type") == "stock":
                 held = p
                 break
         if held is not None:
-            qty = max(1, min(3, int(abs(float(_get(held, "qty", 1))) // 3) or 1))
+            qty = max(1, math.ceil(abs(float(_get(held, "qty", 1))) * 0.25))
             proposed.append({
                 "id": "pt_1",
-                "symbol": top_sym,
+                "symbol": str(held.get("symbol") or top_sym),
                 "side": "SELL",
-                "qty": qty,
+                "qty": float(qty),
                 "order_type": "MKT",
                 "limit_price": None,
                 "tif": "DAY",
-                "rationale": (f"Cut concentration: {top_sym} was {_pct(conc_b)} of gross bought in {pb} "
+                "rationale": (f"Trim 25% of the {top_sym} long: it was {_pct(conc_b)} of gross bought in {pb} "
+                              f"(advisement: cap single-underlying exposure at 30% of monthly buys). Paper only."),
+            })
+        else:
+            proposed.append({
+                "id": "pt_1",
+                "symbol": "SPY",
+                "side": "BUY",
+                "qty": 1.0,
+                "order_type": "MKT",
+                "limit_price": None,
+                "tif": "DAY",
+                "rationale": (f"Rebalance toward the index: {top_sym or 'one name'} was {_pct(conc_b)} of gross "
+                              f"bought in {pb} and no trimmable long is held "
                               f"(advisement: cap single-underlying exposure at 30%). Paper only."),
             })
 

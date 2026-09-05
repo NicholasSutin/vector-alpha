@@ -245,7 +245,7 @@ export function Connect({
         {/* Demo */}
         <Card
           title="Load demo book"
-          subtitle="A synthetic 6-month options + equity book. The fastest path to a demo."
+          subtitle="A synthetic Jan–Aug 2026 options + equity book with a bad July. The fastest path to a demo."
           icon={<Rocket size={18} />}
         >
           <Button variant="primary" onClick={loadDemo} disabled={demoBusy}>
@@ -259,7 +259,7 @@ export function Connect({
         {/* CSV */}
         <Card
           title="Upload broker CSV"
-          subtitle="Robinhood activity export, IBKR Flex CSV, or any generic ledger."
+          subtitle="Robinhood activity export, IBKR Flex CSV, a monthly account-summary statement, or any generic ledger."
           icon={<FileUp size={18} />}
         >
           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -281,6 +281,7 @@ export function Connect({
                 <option value="robinhood">robinhood</option>
                 <option value="ibkr_flex">ibkr_flex</option>
                 <option value="generic">generic</option>
+                <option value="account_summary">account_summary (monthly statement)</option>
               </select>
             </Field>
           </div>

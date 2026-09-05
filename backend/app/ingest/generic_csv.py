@@ -202,7 +202,9 @@ def _row_to_txn(header: list[str], cells: list[Any], source: str, account_id: st
 # ---------------------------------------------------------------- sniffer
 
 def detect_source(text: str) -> str:
-    """Sniff which parser a CSV belongs to: 'robinhood' | 'ibkr_flex' | 'generic'.
+    """Sniff which parser a CSV belongs to.
+
+    Returns 'robinhood' | 'ibkr_flex' | 'account_summary' | 'generic'.
 
     BOM tolerant and tolerant of leading blank lines. Never raises.
     """
@@ -226,6 +228,10 @@ def detect_source(text: str) -> str:
             stripped = ln.lstrip()
             if stripped.startswith(_IB_LINE_PREFIXES):
                 return "ibkr_flex"
+        # a monthly account-summary statement: equity-like column + period column
+        from app.ingest.account_summary_csv import looks_like_account_summary
+        if looks_like_account_summary(cleaned):
+            return "account_summary"
         return "generic"
     except Exception:
         return "generic"

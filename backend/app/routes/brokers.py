@@ -103,6 +103,12 @@ def ibkr_status() -> dict[str, Any]:
             "competing": bool(st.get("competing")),
             "message": str(st.get("message") or ""),
         })
+        if not out["authenticated"]:
+            out["message"] = (
+                f"Gateway is up but not logged in — open {gw.origin} in a browser and log in "
+                f"with your PAPER username (account id DU…)."
+            )
+            return out
     except Exception as e:  # noqa: BLE001 - status must never fail
         out["message"] = (
             f"IBKR gateway not reachable ({e}). Start it with scripts/ibkr-gateway.sh, "

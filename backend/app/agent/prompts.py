@@ -182,3 +182,77 @@ def build_user_message(
         parts.append("")
     parts.append("Return ONLY the JSON object described in the schema.")
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Fast narrative layer
+# ---------------------------------------------------------------------------
+# A 9B model at ~8 tok/s cannot write a whole Report inside any sane timeout, so the engine
+# computes the report deterministically and the model only writes the prose over the top.
+NARRATIVE_SYSTEM_PROMPT = """You are a portfolio variance analyst. The numbers are already
+computed and correct — do NOT recompute or invent any. Write only the narrative layer.
+
+Return ONLY this JSON object, nothing else:
+{"headline": "one sentence naming the biggest driver and the behaviour that amplified it",
+ "why": ["3-4 short causal bullets"],
+ "behaviour": ["2-3 trading-behaviour observations"],
+ "market_context": ["0-4 bullets on the market/macro regime, each ending [source: url]"],
+ "company_changes": [{"symbol": "NVDA", "text": "what changed at this company, one sentence"}]}
+
+Rules: use only numbers, ids and urls that appear below. Cite lot ids where natural.
+Keep the WHOLE response under 120 words. No prose outside the JSON. No code fences."""
+
+
+def _clip(s: Any, n: int) -> str:
+    t = str(s or "").replace("\n", " ").strip()
+    return t[:n]
+
+
+def build_narrative_message(
+    *,
+    period_a: str,
+    period_b: str,
+    compare: dict[str, Any],
+    prior_insights: list[dict[str, Any]],
+    context_insights: list[dict[str, Any]],
+    macro: list[dict[str, Any]],
+    company: list[dict[str, Any]],
+    question: str | None = None,
+    budget: int = 3000,
+) -> str:
+    """Compact (<= `budget` chars) user message for the narrative-only LLM call."""
+    facts = (compare.get("facts") or [])[:8]
+    drivers = (compare.get("drivers") or [])[:4]
+    flags = compare.get("behaviour_flags") or []
+
+    p: list[str] = [f"PERIOD {period_a} -> {period_b} (explain {period_b}).", "FACTS:"]
+    p += [f"{i}. {_clip(f, 160)}" for i, f in enumerate(facts, 1)]
+    p.append("DRIVERS:")
+    for d in drivers:
+        p.append(
+            f"- {d.get('key')} ({d.get('dimension')}) {d.get('a')}->{d.get('b')} "
+            f"contrib {d.get('contribution_pct')} lots {','.join((d.get('evidence_lot_ids') or [])[:3])}"
+        )
+    p.append("BEHAVIOUR: " + _clip("; ".join(str(f) for f in flags), 240))
+    if prior_insights:
+        p.append("PRIOR ADVICE:")
+        p += [f"- {_clip(pi.get('text'), 110)}" for pi in prior_insights[:3]]
+    if context_insights:
+        p.append("KNOWN BUSINESS CONTEXT (from earlier runs):")
+        p += [f"- {_clip(ci.get('text'), 110)}" for ci in context_insights[:3]]
+    if macro:
+        p.append("MARKET NEWS:")
+        p += [f"- {_clip(m.get('title'), 90)} :: {m.get('url')} :: {_clip(m.get('content'), 200)}"
+              for m in macro[:3]]
+    if company:
+        p.append("COMPANY NEWS (write one `company_changes` entry per symbol):")
+        for c in company[:3]:
+            p.append(f"- {c.get('symbol')}: {_clip(c.get('text'), 200)}")
+    if question:
+        p.append(f"USER ASKS: {_clip(question, 160)}")
+    p.append("Return ONLY the JSON object. Under 120 words.")
+
+    msg = "\n".join(p)
+    if len(msg) > budget:            # hard cap: drop from the end, keep the header intact
+        msg = msg[: budget - 60].rsplit("\n", 1)[0] + "\nReturn ONLY the JSON object. Under 120 words."
+    return msg

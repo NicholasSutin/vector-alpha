@@ -238,7 +238,15 @@ class IBKRGateway:
 
     # -- session ------------------------------------------------------------
     def status(self) -> dict[str, Any]:
-        data = self._post("/iserver/auth/status")
+        try:
+            data = self._post("/iserver/auth/status")
+        except IBKRError as e:
+            # The gateway answers 401/403 on auth/status until someone logs in through the
+            # browser: that is "reachable but not authenticated", not "down".
+            if "HTTP 401" in str(e) or "HTTP 403" in str(e):
+                return {"authenticated": False, "connected": False, "competing": False,
+                        "message": "not logged in"}
+            raise
         if not isinstance(data, dict):
             data = {}
         return {

@@ -180,6 +180,12 @@ class PriorInsightReview(BaseModel):
     note: str = ""
 
 
+class CompanyChange(BaseModel):
+    symbol: str
+    text: str                                   # what changed at the company in period B (earnings, guidance, price move)
+    sources: list[str] = Field(default_factory=list)
+
+
 class Report(BaseModel):
     headline: str
     what_changed: list[str] = Field(default_factory=list)
@@ -192,6 +198,7 @@ class Report(BaseModel):
     confidence: float = 0.5
     sources: list[str] = Field(default_factory=list)
     market_context: list[str] = Field(default_factory=list)   # macro/market regime bullets (Tavily-sourced)
+    company_changes: list[CompanyChange] = Field(default_factory=list)   # per top-driver company context (Tavily-sourced)
 
 
 class Insight(BaseModel):

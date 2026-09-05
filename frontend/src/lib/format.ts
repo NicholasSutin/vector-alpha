@@ -94,16 +94,21 @@ export function periodLabel(p: string | null | undefined): string {
   return `${months[idx] ?? m[2]} ${m[1]}`;
 }
 
+/** Date-only ISO strings (YYYY-MM-DD) are parsed as LOCAL dates so they don't shift a day in US timezones. */
+function parseIso(iso: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T00:00:00`) : new Date(iso);
+}
+
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const d = parseIso(iso);
   if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export function dateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const d = parseIso(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
   return d.toLocaleString('en-US', {
     month: 'short',

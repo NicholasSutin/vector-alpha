@@ -18,6 +18,7 @@ monthly deposits, dividends, interest and platform fees.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable
@@ -366,6 +367,12 @@ def _july(book: Book, rnd: random.Random, period: str, days: list[date], month_i
                         asset_type="option", strategy="momentum", open_d=open_d, close_d=close_d,
                         qty=4, open_price=round(2.90 + i * 0.25, 2), target_pnl=tgt)
 
+    # --- a NVDA long opened late July and NOT closed: the lingering ------
+    # concentration the agent's "cut NVDA exposure" advisement can act on
+    book.trade(ts=_ts(days[min(len(days) - 1, 18)], 15, 42), symbol="NVDA", underlying="NVDA",
+               asset_type="stock", side="buy", open_close="open", qty=6, price=181.40,
+               strategy="momentum", description="Buy NVDA common stock (averaging down)")
+
     # --- six quick stock flips +400 ---------------------------------------
     names = ["AAPL", "MSFT", "SPY", "PLTR", "SOFI", "AMD"]
     targets = _alloc(rnd, 6, 400.0, wins=4)
@@ -401,23 +408,74 @@ def _august(book: Book, rnd: random.Random, period: str, days: list[date],
                         open_d=open_d, close_d=close_d, qty=qty, open_price=price,
                         target_pnl=targets[i], split=(i == 3))
 
+    # --- core longs left open at the end of the book -----------------------
+    for sym, shares, day_idx in (("AAPL", 10, 4), ("MSFT", 5, 7), ("SPY", 8, 10)):
+        book.trade(ts=_ts(days[day_idx], 10, 12), symbol=sym, underlying=sym, asset_type="stock",
+                   side="buy", open_close="open", qty=shares,
+                   price=_stock_price(sym, month_idx, rnd), strategy="income",
+                   description=f"Buy {sym} — core long (held)")
+    # one open SOFI call
+    sofi_call = option_symbol("SOFI", _expiry_for(period, 2), "C", 12)
+    book.trade(ts=_ts(days[6], 11, 20), symbol=sofi_call, underlying="SOFI", asset_type="option",
+               side="buy", open_close="open", qty=2, price=0.62, strategy="swing",
+               description=f"Buy to open {sofi_call} call (held)")
 
-def generate_synthetic_snapshots() -> list[dict[str, Any]]:
-    """Month-end equity/cash snapshots for the demo book (source "synthetic")."""
+
+# marks used to value still-open positions at each month end
+MARKS = {"AAPL": 1.035, "MSFT": 1.021, "SPY": 1.014, "NVDA": 0.882, "SOFI": 1.24,
+         "AMD": 1.028, "PLTR": 0.97, "TSLA": 1.01, "BTC": 1.03}
+
+
+def generate_synthetic_snapshots(txns: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Month-end equity/cash/positions snapshots, derived from the demo book itself.
+
+    Open positions are marked with a fixed per-underlying factor so
+    market_value / unrealized_pnl are internally consistent with the tape.
+    """
+    from app.analytics.ledger import match_lots, multiplier_for, open_lots
+
+    txns = list(txns) if txns is not None else generate_synthetic_book()
     equity_base, cash_base = 24000.0, 6200.0
     out: list[dict[str, Any]] = []
-    for i, period in enumerate(PERIODS):
-        days = _business_days(period)
-        pnl = sum(MONTH_TARGET[p] for p in PERIODS[: i + 1])
-        deposits = 2000.0 * (i + 1) + 750.0 * len([m for m in range(i + 1) if m in (1, 3, 5, 6)])
-        equity = round(equity_base + deposits + pnl, 2)
+
+    for period in PERIODS:
+        cutoff = _ts(_business_days(period)[-1], 20, 30)
+        subset = [t for t in txns if t["ts"] <= cutoff]
+        realized = sum(float(l["realized_pnl"]) for l in match_lots(subset))
+        cash_moves = sum(float(t["amount"]) for t in subset
+                         if t["asset_type"] in ("transfer", "dividend", "interest", "fee"))
+        deposits = sum(float(t["amount"]) for t in subset if t["asset_type"] == "transfer")
+
+        positions, unrealized, mkt_total = [], 0.0, 0.0
+        for symbol, lots in open_lots(subset).items():
+            qty = sum(l["dir"] * l["qty"] for l in lots)
+            if abs(qty) < 1e-9:
+                continue
+            asset_type = lots[0]["asset_type"]
+            mult = multiplier_for(asset_type)
+            units = sum(l["qty"] for l in lots) or 1.0
+            avg_cost = sum(l["unit_dollars"] * l["qty"] for l in lots) / units / (mult or 1.0)
+            und = str(lots[0].get("underlying") or symbol.split(" ")[0]).upper()
+            last = round(avg_cost * MARKS.get(und, 1.0), 4)
+            mv = round(last * qty * mult, 2)
+            cost = round(avg_cost * qty * mult, 2)
+            unrealized += mv - cost
+            mkt_total += mv
+            positions.append({
+                "symbol": symbol, "underlying": und, "asset_type": asset_type,
+                "qty": round(qty, 6), "avg_cost": round(avg_cost, 4), "last": last,
+                "market_value": mv, "unrealized_pnl": round(mv - cost, 2),
+            })
+        positions.sort(key=lambda p: (p["asset_type"], p["symbol"]))
+
+        cash = round(cash_base + cash_moves + realized - mkt_total + deposits * 0.0, 2)
         out.append({
             "id": "snap_" + hashlib.sha1(f"{SOURCE}|{period}".encode()).hexdigest()[:12],
             "source": SOURCE,
             "account_id": ACCOUNT_ID,
-            "as_of": _ts(days[-1], 20, 30),
-            "equity": equity,
-            "cash": round(cash_base + deposits * 0.22 + pnl * 0.4, 2),
-            "positions_json": "[]",
+            "as_of": cutoff,
+            "equity": round(equity_base + cash_moves + realized + unrealized, 2),
+            "cash": cash,
+            "positions_json": json.dumps(positions),
         })
     return out

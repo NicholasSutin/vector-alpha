@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, GitCompare, Sparkles, TrendingDown } from 'lucide-react';
 import type { AgentEvent, Overview, Report, VarianceReport } from '../api';
-import { comparePeriods, startAnalysis, subscribeToRun } from '../api';
+import { comparePeriods, getPeriods, startAnalysis, subscribeToRun } from '../api';
 import { Button, Card, ErrorBox, Pill, Spinner, inputCls } from './Pills';
 import { KpiTile } from './KpiTile';
 import { Bridge } from './Bridge';
@@ -47,15 +47,39 @@ export function Explain({
   const [runErr, setRunErr] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
 
-  // default to the last two periods
+  // default to the consecutive month pair with the largest realized-P&L swing
+  // (the track's "find the most meaningful variance"); fall back to the last two periods.
   useEffect(() => {
-    if (periods.length >= 2) {
-      setA((cur) => (cur && periods.includes(cur) ? cur : periods[periods.length - 2]));
-      setB((cur) => (cur && periods.includes(cur) ? cur : periods[periods.length - 1]));
-    } else if (periods.length === 1) {
+    if (periods.length === 1) {
       setA(periods[0]);
       setB(periods[0]);
+      return;
     }
+    if (periods.length < 2) return;
+    let cancelled = false;
+    const fallback: [string, string] = [periods[periods.length - 2], periods[periods.length - 1]];
+    (async () => {
+      let best = fallback;
+      try {
+        const { periods: sums } = await getPeriods();
+        let bestAbs = -1;
+        for (let i = 1; i < sums.length; i++) {
+          const d = Math.abs(sums[i].realized_pnl - sums[i - 1].realized_pnl);
+          if (d > bestAbs) {
+            bestAbs = d;
+            best = [sums[i - 1].period, sums[i].period];
+          }
+        }
+      } catch {
+        /* keep fallback */
+      }
+      if (cancelled) return;
+      setA((cur) => (cur && periods.includes(cur) ? cur : best[0]));
+      setB((cur) => (cur && periods.includes(cur) ? cur : best[1]));
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [periods.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadVariance = useCallback(async () => {

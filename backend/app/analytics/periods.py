@@ -51,6 +51,19 @@ def _mean(values: Sequence[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
+def fee_of(t: dict[str, Any]) -> float:
+    """A transaction's fee contribution, counted exactly once.
+
+    A dedicated `fee` row may carry the charge in `amount` (signed), in `fees`
+    (positive), or — as most parsers emit — in both; a trade row carries only
+    its commission in `fees`. Summing both columns blindly double-counts.
+    """
+    fees = abs(_f(t.get("fees")))
+    if str(t.get("asset_type") or "") == "fee":
+        return max(fees, abs(_f(t.get("amount"))))
+    return fees
+
+
 def is_trade(t: dict[str, Any]) -> bool:
     """A buy/sell of a tradeable instrument (expirations do not count as trades)."""
     return (str(t.get("asset_type") or "") in TRADE_TYPES
@@ -100,7 +113,7 @@ def _dimension(lots: Sequence[dict], txns: Sequence[dict], lot_key, txn_key) -> 
         if k is None:
             continue
         trades[k] += 1
-        fees[k] += abs(_f(t.get("fees")))
+        fees[k] += fee_of(t)
         gross[k] += abs(_f(t.get("amount")))
     keys = set(pnl) | set(trades) | set(gross)
     return _drivers([(k, pnl[k], trades[k], fees[k], gross[k]) for k in keys])
@@ -151,8 +164,7 @@ def summarize_period(period: str, txns: Sequence[dict[str, Any]], lots: Sequence
     sells = [t for t in trades if str(t.get("side")).lower() == "sell"]
 
     realized_pnl = sum(_f(l.get("realized_pnl")) for l in p_lots)
-    fees = (sum(abs(_f(t.get("fees"))) for t in p_txns)
-            + sum(abs(_f(t.get("amount"))) for t in p_txns if t.get("asset_type") == "fee"))
+    fees = sum(fee_of(t) for t in p_txns)
     dividends = sum(_f(t.get("amount")) for t in p_txns if t.get("asset_type") == "dividend")
     interest = sum(_f(t.get("amount")) for t in p_txns if t.get("asset_type") == "interest")
     net_deposits = sum(_f(t.get("amount")) for t in p_txns if t.get("asset_type") == "transfer")
