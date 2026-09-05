@@ -144,13 +144,15 @@ export default function App() {
   const prismTone: Tone = prism?.live_connected ? 'emerald' : prism?.configured ? 'amber' : 'slate';
 
   const ibkrLabel = ibkr?.authenticated
-    ? ibkr.selected_account
-      ? `${ibkr.selected_account}`
-      : 'connected'
+    ? ibkr.demo
+      ? 'demo'
+      : ibkr.selected_account
+        ? `${ibkr.selected_account}`
+        : 'connected'
     : ibkr?.reachable
       ? 'gateway up'
       : 'off';
-  const ibkrTone: Tone = ibkr?.authenticated ? 'emerald' : ibkr?.reachable ? 'amber' : 'slate';
+  const ibkrTone: Tone = ibkr?.authenticated ? (ibkr.demo ? 'sky' : 'emerald') : ibkr?.reachable ? 'amber' : 'slate';
 
   return (
     <div className="min-h-screen bg-[#0b0f17]">

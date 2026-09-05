@@ -26,6 +26,7 @@ from app.config import settings  # noqa: E402
 for _field, _blank in (
     ("llm_base_url", ""), ("llm_model", ""), ("tavily_api_key", ""),
     ("llm_fallback_base_url", ""), ("llm_fallback_model", ""), ("llm_fallback_api_key", ""),
+    ("ibkr_demo", "0"),
     ("prism_api_key", ""), ("prism_project_id", ""),
     ("db_path", _TMP / "test.db"),
 ):

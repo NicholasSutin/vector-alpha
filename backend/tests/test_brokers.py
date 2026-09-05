@@ -465,3 +465,32 @@ def test_robinhood_login_success_and_sync_conversion(monkeypatch):
     assert rows["rhl:d1"]["asset_type"] == "dividend" and rows["rhl:d1"]["amount"] == 12.5
     assert rows["rhl:b1"]["asset_type"] == "transfer" and rows["rhl:b1"]["amount"] == -500.0
     assert res["date_range"]["start"].startswith("2026-07-02")
+
+
+def test_demo_connection_preview_place_fill(client, monkeypatch):
+    """IBKR_DEMO=1: the desk simulates a paper session end-to-end without any gateway."""
+    from app.config import settings as _settings
+    from app.db import fetch_transactions
+
+    from app.db import kv_set
+    object.__setattr__(_settings, "ibkr_demo", "1")
+    kv_set("ibkr_account_id", "")   # no real paper account selected -> the pseudo DU-DEMO account
+    st = client.get("/api/brokers/ibkr/status").json()
+    assert st["demo"] is True and st["authenticated"] is True and st["selected_account"] == "DU-DEMO"
+
+    pv = client.post("/api/brokers/ibkr/orders/preview",
+                     json={"symbol": "NVDA", "side": "SELL", "qty": 2, "order_type": "MKT", "rationale": "trim"})
+    assert pv.status_code == 200, pv.text
+    body = pv.json()
+    assert body["account_id"] == "DU-DEMO" and body["preview"]["demo"] is True
+
+    pl = client.post("/api/brokers/ibkr/orders/place", json={"order_id": body["order_id"]})
+    assert pl.status_code == 200, pl.text
+    assert pl.json()["status"] == "filled"
+    order = pl.json()["order"]
+    assert order["fill"]["price"] > 0 and order["mark"] and order["pnl_since_fill"] is not None
+
+    listed = client.get("/api/brokers/ibkr/orders").json()["orders"]
+    assert listed and listed[0]["status"] == "filled"
+    txns = fetch_transactions("id LIKE ?", ("ibkr:order:demo-%",))
+    assert len(txns) == 1 and txns[0]["side"] == "sell"

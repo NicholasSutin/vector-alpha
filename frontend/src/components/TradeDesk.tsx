@@ -635,7 +635,7 @@ export function TradeDesk({
         <Building2 size={18} className="text-slate-400" />
         <span className="font-semibold text-slate-100">IBKR paper desk</span>
         <Pill tone={ready ? 'emerald' : ibkr?.reachable ? 'amber' : 'rose'}>
-          {ready ? 'connected' : ibkr?.reachable ? 'gateway up · not authenticated' : 'offline'}
+          {ready ? (ibkr?.demo ? 'demo connection · simulated fills' : 'connected') : ibkr?.reachable ? 'gateway up · not authenticated' : 'offline'}
         </Pill>
         {ibkr?.selected_account && <Pill tone="sky">{ibkr.selected_account}</Pill>}
         {ibkr?.paper && <Pill tone="violet">PAPER</Pill>}

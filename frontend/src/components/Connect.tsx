@@ -324,7 +324,7 @@ export function Connect({
               {ibkr?.reachable ? 'gateway reachable' : 'gateway unreachable'}
             </Pill>
             <Pill tone={ibkrTone}>
-              {ibkr?.authenticated ? 'authenticated' : 'not authenticated'}
+              {ibkr?.authenticated ? (ibkr.demo ? 'demo connection' : 'authenticated') : 'not authenticated'}
             </Pill>
             {ibkr?.paper && <Pill tone="sky">PAPER</Pill>}
             {ibkr?.accounts?.length ? (

@@ -62,6 +62,8 @@ class Settings:
     ibkr_gateway_url: str = os.getenv("IBKR_GATEWAY_URL", "https://localhost:5001/v1/api")
     ibkr_account_id: str = os.getenv("IBKR_ACCOUNT_ID", "")
     ibkr_paper_only: bool = _bool(os.getenv("IBKR_PAPER_ONLY"), True)   # never set false in this repo
+    # "auto" = simulate a paper connection whenever the real gateway is not logged in; "1" = always; "0" = never
+    ibkr_demo: str = os.getenv("IBKR_DEMO", "auto").strip().lower() or "auto"
     ibkr_flex_token: str = os.getenv("IBKR_FLEX_TOKEN", "")
     ibkr_flex_query_id: str = os.getenv("IBKR_FLEX_QUERY_ID", "")
 

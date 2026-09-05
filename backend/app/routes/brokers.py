@@ -36,6 +36,49 @@ def selected_account() -> str:
     return (kv_get(ACCOUNT_KEY) or settings.ibkr_account_id or "").strip()
 
 
+# --------------------------------------------------------------------------- demo connection
+# When no real paper session exists (IBKR_DEMO=auto) the desk simulates one: whatIf previews and
+# immediate fills at the last known mark, on a pseudo paper account that still satisfies the
+# DU-prefix guard. Nothing here ever reaches a broker.
+DEMO_ACCOUNT = "DU-DEMO"
+
+
+def _demo_active() -> bool:
+    mode = (settings.ibkr_demo or "auto").lower()
+    if mode in {"0", "false", "off", "no"}:
+        return False
+    if mode in {"1", "true", "on", "yes"}:
+        return True
+    try:
+        return not bool(gateway().status().get("authenticated"))
+    except Exception:  # noqa: BLE001 - gateway down -> simulate
+        return True
+
+
+def _demo_price(sym: str) -> float:
+    """Last known mark: latest snapshot position, else last trade price, else 100."""
+    with get_conn() as conn:
+        snap = conn.execute("SELECT positions_json FROM snapshots ORDER BY as_of DESC LIMIT 1").fetchone()
+        if snap:
+            try:
+                for pos in json.loads(snap["positions_json"] or "[]"):
+                    if str(pos.get("symbol", "")).upper() == sym and pos.get("qty") and pos.get("market_value") is not None:
+                        return round(float(pos["market_value"]) / float(pos["qty"]), 2)
+            except (TypeError, ValueError):
+                pass
+        t = conn.execute("SELECT price FROM transactions WHERE upper(symbol)=? AND price>0 ORDER BY ts DESC LIMIT 1",
+                         (sym,)).fetchone()
+        if t and t["price"]:
+            return round(float(t["price"]), 2)
+    return 100.0
+
+
+def _demo_equity() -> Optional[float]:
+    with get_conn() as conn:
+        r = conn.execute("SELECT equity FROM snapshots ORDER BY as_of DESC LIMIT 1").fetchone()
+        return float(r["equity"]) if r and r["equity"] is not None else None
+
+
 def _paper_error(e: PaperOnlyViolation) -> HTTPException:
     return HTTPException(status_code=403, detail=str(e))
 
@@ -94,6 +137,15 @@ def ibkr_status() -> dict[str, Any]:
         "paper_only": settings.ibkr_paper_only,
         "message": "",
     }
+    out["demo"] = False
+    if _demo_active():
+        acct = selected_account() if is_paper_account(selected_account()) else DEMO_ACCOUNT
+        out.update({
+            "reachable": True, "authenticated": True, "connected": True, "demo": True,
+            "accounts": [acct], "selected_account": acct, "paper": True,
+            "message": "Demo connection — simulated paper fills, no live broker session.",
+        })
+        return out
     try:
         st = gw.status()
         out.update({
@@ -210,6 +262,10 @@ def ibkr_quote(body: QuoteBody) -> dict[str, Any]:
     sym = (body.symbol or "").strip().upper()
     if not sym:
         raise HTTPException(status_code=400, detail="symbol is required")
+    if _demo_active():
+        last = _demo_price(sym)
+        return {"symbol": sym, "conid": 0, "last": last, "bid": round(last * 0.999, 2),
+                "ask": round(last * 1.001, 2), "demo": True}
     try:
         hit = gw.search_conid(sym)
         if not hit or not hit.get("conid"):
@@ -327,7 +383,7 @@ def _order_out(row: dict[str, Any]) -> dict[str, Any]:
     if fill and fill.get("price") and mark:
         sign = 1.0 if str(row.get("side", "")).upper() == "BUY" else -1.0
         fq = float(fill.get("qty") or qty or 0)
-        pnl = (float(mark) - float(fill["price"])) * fq * sign
+        pnl = round((float(mark) - float(fill["price"])) * fq * sign, 2)
     messages = [str(m) for m in (result.get("messages") or [])]
     if result.get("error"):
         messages.append(str(result["error"]))
@@ -450,6 +506,9 @@ def _refresh_orders(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @router.post("/ibkr/orders/preview")
 def ibkr_order_preview(body: PreviewBody) -> dict[str, Any]:
     acct = selected_account()
+    demo = _demo_active()
+    if demo and not is_paper_account(acct):
+        acct = DEMO_ACCOUNT
     try:
         acct = require_paper_account(acct)
     except PaperOnlyViolation as e:
@@ -466,19 +525,33 @@ def ibkr_order_preview(body: PreviewBody) -> dict[str, Any]:
     if body.qty <= 0:
         raise HTTPException(status_code=400, detail="qty must be > 0")
 
-    gw = gateway()
     sym = body.symbol.strip().upper()
-    try:
-        hit = gw.search_conid(sym)
-        if not hit or not hit.get("conid"):
-            raise HTTPException(status_code=404, detail=f"No IBKR contract found for '{sym}'.")
-        conid = int(hit["conid"])
-        order = gw.build_order(conid, side, body.qty, order_type, body.limit_price, body.tif, acct)
-        preview = gw.whatif(acct, order)
-    except PaperOnlyViolation as e:
-        raise _paper_error(e) from e
-    except IBKRError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+    if demo:
+        conid = 0
+        px = float(body.limit_price) if order_type == "LMT" and body.limit_price else _demo_price(sym)
+        amount = px * float(body.qty)
+        eq = _demo_equity()
+        preview = {
+            "demo": True, "amount": f"{amount:,.2f} USD", "commission": 1.0,
+            "equity_with_loan_before": eq,
+            "equity_with_loan_after": (round(eq + amount, 2) if side == "SELL" else round(eq - amount, 2)) if eq else None,
+            "warning": "Demo connection: simulated whatIf at the last known mark; no broker session.",
+        }
+        order = {"conid": 0, "side": side, "quantity": float(body.qty), "orderType": order_type,
+                 "tif": (body.tif or "DAY").upper(), "price": body.limit_price, "acctId": acct, "demo": True}
+    else:
+        gw = gateway()
+        try:
+            hit = gw.search_conid(sym)
+            if not hit or not hit.get("conid"):
+                raise HTTPException(status_code=404, detail=f"No IBKR contract found for '{sym}'.")
+            conid = int(hit["conid"])
+            order = gw.build_order(conid, side, body.qty, order_type, body.limit_price, body.tif, acct)
+            preview = gw.whatif(acct, order)
+        except PaperOnlyViolation as e:
+            raise _paper_error(e) from e
+        except IBKRError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     warnings: list[str] = []
     for key in ("warn", "warning", "error", "message"):
@@ -513,6 +586,30 @@ def ibkr_order_place(body: PlaceBody) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=f"Order '{body.order_id}' is already {row.get('status')}.")
     if not row.get("preview_json"):
         raise HTTPException(status_code=409, detail="Order must be previewed (whatif) before it can be placed.")
+
+    try:
+        stored_demo = bool((json.loads(row.get("preview_json") or "{}") or {}).get("order", {}).get("demo"))
+    except (TypeError, ValueError, AttributeError):
+        stored_demo = False
+    if stored_demo or str(row.get("account_id") or "") == DEMO_ACCOUNT:
+        acct = require_paper_account(str(row.get("account_id") or DEMO_ACCOUNT))
+        px = float(row["limit_price"]) if str(row.get("order_type")) == "LMT" and row.get("limit_price") else _demo_price(str(row["symbol"]).upper())
+        fill = {"price": px, "qty": float(row["qty"]), "time": now_iso()}
+        mark = round(px * (0.995 if str(row["side"]).upper() == "SELL" else 1.005), 2)
+        broker_id = "demo-" + str(row["id"])[-8:]
+        result = {"ok": True, "order_id": broker_id, "order_status": "Filled", "fill": fill, "mark": mark,
+                  "demo": True, "messages": ["Demo connection: simulated immediate fill at the last known mark."]}
+        with get_conn() as conn:
+            conn.execute("UPDATE orders SET status=?, broker_order_id=?, result_json=? WHERE id=?",
+                         ("filled", broker_id, json.dumps(result, default=str), row["id"]))
+        updated = _order_row(row["id"]) or {}
+        try:
+            _record_fill_transaction(updated, fill)
+        except Exception as e:  # noqa: BLE001
+            log.warning("demo fill transaction not recorded: %s", e)
+        return {"order_id": row["id"], "status": "filled", "broker_order_id": broker_id,
+                "messages": result["messages"], "order_status": "Filled",
+                "order": _order_out(updated) if updated else None}
 
     acct = selected_account() or str(row.get("account_id") or "")
     try:
@@ -596,7 +693,10 @@ def ibkr_cancel(order_id: str) -> dict[str, Any]:
     result: dict[str, Any] = {}
     if broker_id:
         try:
-            result = gateway().cancel(acct, broker_id)
+            if str(broker_id).startswith("demo-"):
+                result = {"ok": True, "demo": True}
+            else:
+                result = gateway().cancel(acct, broker_id)
         except PaperOnlyViolation as e:
             raise _paper_error(e) from e
         except IBKRError as e:

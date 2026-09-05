@@ -259,6 +259,8 @@ export type IbkrStatus = {
   selected_account: string | null;
   paper: boolean;
   login_url: string;
+  demo?: boolean;
+  message?: string;
 };
 
 export type RobinhoodStatus = { logged_in: boolean; username?: string; message: string };
