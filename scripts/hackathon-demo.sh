@@ -8,7 +8,7 @@
 #   4. Loads the synthetic demo book if the DB is empty
 #   5. Opens tabs: app · IBKR login · PRISM dashboard (· Robinhood reports with DEMO_OPEN_ROBINHOOD=1)
 #
-# Env knobs: DEMO_PORT=8000  DEMO_DEV=1 (Vite dev server instead of build)  DEMO_NO_BROWSER=1
+# Env knobs: DEMO_PORT=8000  DEMO_DEV=1 (Vite dev server instead of build)  DEMO_NO_BROWSER=1  DEMO_RESET=1 (wipe runs/insights, reload demo book)
 #            DEMO_IBKR=0|1   DEMO_RELOAD=1 (reload demo book)  DEMO_OPEN_ROBINHOOD=1
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -72,12 +72,17 @@ else
   UI_URL="http://localhost:$PORT"
 fi
 cd "$ROOT/backend"
-say "starting API on :$PORT (log: .demo-logs/api.log)"
-( .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port "$PORT" >"$LOGS/api.log" 2>&1 ) & PIDS+=($!)
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  ok "API already listening on :$PORT (reusing it; stop it first to restart on fresh code)"
+else
+  say "starting API on :$PORT (log: .demo-logs/api.log)"
+  ( .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port "$PORT" >"$LOGS/api.log" 2>&1 ) & PIDS+=($!)
+fi
 for i in $(seq 1 40); do curl -sf "$API/health" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "$API/health" >/dev/null 2>&1 && ok "API healthy: $(curl -s "$API/health")" || { warn "API did not come up — see .demo-logs/api.log"; }
 
 # ---------- 4. demo data ----------
+if [ "${DEMO_RESET:-0}" = "1" ]; then curl -s -X POST "$API/ingest/reset" >/dev/null && ok "reset runs/insights/orders/data"; fi
 HAS=$(curl -s "$API/portfolio/overview" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("has_data",False))' 2>/dev/null || echo False)
 if [ "$HAS" != "True" ] || [ "${DEMO_RELOAD:-0}" = "1" ]; then
   R=$(curl -s -X POST "$API/ingest/demo"); ok "demo book loaded: $(echo "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("inserted"),"txns",d.get("date_range"))' 2>/dev/null)"

@@ -5,6 +5,8 @@ export type Health = {
   version: string;
   has_llm?: boolean;
   llm_model?: string | null;
+  llm_provider?: string | null;
+  llm_fallback?: string | null;
   has_anthropic_key?: boolean;
   has_tavily_key?: boolean;
   has_tavily?: boolean;

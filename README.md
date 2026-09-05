@@ -34,6 +34,8 @@ A period-over-period **variance engine** over normalized broker transactions, wr
 contribution % and evidence ids → market context → behaviour → advisements → proposed paper trades
 → review of the previous run's advisements.
 
+![Report: what changed, why, company changes, market context](docs/screenshot-report.png)
+
 ## Key features
 
 - **Connect your history**: Robinhood account-activity CSV, IBKR Flex Query, live IBKR Client
@@ -41,12 +43,15 @@ contribution % and evidence ids → market context → behaviour → advisements
 - **Explain the change**: FIFO lot matching → monthly `PeriodSummary` (P&L, fees, dividends,
   deposits, win rate, hold time, options share, concentration) → `VarianceReport` with ranked
   drivers, contribution %, P&L bridge (waterfall), and machine-generated evidence *facts*.
-- **Agent reasoning** on an OpenAI-compatible model (GIDE local API / hosted Qwen); no vendor lock.
-  With no model configured it still produces the full report deterministically from the facts.
+- **Agent reasoning** on any OpenAI-compatible model: Cloudflare Workers AI (Llama 4 Scout, ~5 s)
+  or GIDE's local Ornith 1.5 9B (offline). No Anthropic/OpenAI keys anywhere. With no model
+  configured it still produces the full report deterministically from the facts.
 - **Market context** via Tavily: index moves, VIX, Fed/rates and driver-specific news for the
   period, so "why" covers the regime, not just your own behaviour.
-- **Memory across runs**: advisements are saved as insights; the next run reviews each one
-  (*followed / ignored / validated / invalidated*) against the new period's numbers.
+- **Memory across runs**: advisements and company context are saved as insights; the next run
+  reviews each one (*followed / ignored / validated / invalidated*) against the new period's numbers.
+  Demo: June→July writes "cap NVDA at 30% of buys, hold ≥5 days, cut turnover"; July→August marks
+  them **validated** because August traded 41% less, held 11 days and cut NVDA.
 - **Act, safely**: proposed trades → IBKR *whatIf* preview → place on the **paper** account.
   A guard refuses any account id that is not `DU…`/`DF…`.
 - **Observe → Improve → Prove**: every run is one PRISM trajectory (`session_id = run_id`),
@@ -59,7 +64,7 @@ contribution % and evidence ids → market context → behaviour → advisements
 | Layer | Tech |
 |---|---|
 | Backend | Python 3.14 · FastAPI · pandas · SQLite · SSE streaming |
-| Agent | OpenAI-compatible chat (GIDE Ornith 1.0 / Qwen) · strict-JSON reports · deterministic fallback |
+| Agent | OpenAI-compatible chat: **Cloudflare Workers AI** (Llama 4 Scout) or **GIDE** local Ornith 1.5 · strict-JSON narrative · deterministic fallback |
 | Observability | **PRISM** (`prismtrace-sdk`): `trace_llm` + `submit_trajectory` per run |
 | Research | **Tavily** news search (macro regime + driver-specific evidence) |
 | Brokers | IBKR Client Portal Web API (local gateway, paper) · IBKR Flex Web Service · robin_stocks |
@@ -111,7 +116,7 @@ Tests: `cd backend && .venv/bin/python -m pytest -q`
 
 | Var | Purpose |
 |---|---|
-| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | any OpenAI-compatible endpoint. GIDE local API is the hackathon path; leave blank for deterministic mode |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | any OpenAI-compatible endpoint. **Cloudflare Workers AI**: `https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/ai/v1` + `@cf/meta/llama-4-scout-17b-16e-instruct` + an API token. **GIDE**: `http://127.0.0.1:41337/v1` + `local` + `sk-gide-…`. Blank = deterministic mode |
 | `TAVILY_API_KEY` | market/macro context and driver news |
 | `PRISMTRACE_API_KEY`, `PRISMTRACE_PROJECT_ID`, `PRISMTRACE_HOST` | PRISM tracing |
 | `IBKR_GATEWAY_URL` (default `https://localhost:5001/v1/api`), `IBKR_ACCOUNT_ID` | Client Portal Gateway (paper) |
@@ -134,8 +139,10 @@ Tests: `cd backend && .venv/bin/python -m pytest -q`
 - **PRISM** — required, and central: one trajectory per run with each tool step
   (`recall_insights`, `compare_periods`, `drill_down`, `macro_context`, `llm_reason`) and a
   `trace_llm` for the model call. The **Memory & Runs** tab shows PRISM's setup-doctor status.
-- **GIDE** — the app was built with GIDE, and GIDE's local OpenAI-compatible API is the model
-  endpoint. No cloud LLM keys anywhere in the project:
+- **Cloudflare Workers AI** — the default reasoning endpoint (OpenAI-compatible `/ai/v1`,
+  Llama 4 Scout); swap models with `LLM_MODEL`.
+- **GIDE** — the app was built with GIDE, and GIDE's local OpenAI-compatible API is the offline
+  model endpoint (same code path, tighter output budget for the 9B model):
   ```bash
   curl -fsSL https://generativeide.com/install.sh | sh     # CLI → ~/.local/bin/gide
   gide models pull ornith-1.5-9b                            # 6.2 GB local model (Apple Silicon)

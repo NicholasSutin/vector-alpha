@@ -32,6 +32,17 @@ def _startup() -> None:
     init_db()
 
 
+def _provider_name(url: str) -> str:
+    u = (url or "").lower()
+    if "127.0.0.1" in u or "localhost" in u:
+        return "GIDE"
+    if "cloudflare.com" in u:
+        return "Cloudflare"
+    if "openrouter.ai" in u:
+        return "OpenRouter"
+    return "custom"
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
@@ -39,6 +50,8 @@ def health() -> dict:
         "version": __version__,
         "has_llm": settings.has_llm,
         "llm_model": settings.llm_model or None,
+        "llm_provider": _provider_name(settings.llm_base_url) if settings.has_llm else None,
+        "llm_fallback": (settings.llm_fallback_model or None) if settings.has_llm_fallback else None,
         "has_tavily": settings.has_tavily,
         "prism": {"configured": settings.has_prism, "host": settings.prism_host},
     }

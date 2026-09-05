@@ -3,6 +3,11 @@
 Setup before recording: `./scripts/hackathon-demo.sh` (or `cd frontend && pnpm run hackathon-demo`).
 Have the IBKR paper gateway logged in (https://localhost:5001) if you want to show a real fill.
 
+**Seed the memory story first** (once): in the UI run **Jun 2026 → Jul 2026** (the bad month; the agent
+writes its advisements to memory), then run **Jul 2026 → Aug 2026** — the "prior insight review" shows the
+July advisements as *validated / followed* because August traded less, held longer and cut NVDA.
+`DEMO_RESET=1 ./scripts/hackathon-demo.sh` wipes runs/insights and reloads the demo book for a clean take.
+
 | t | Screen | Say |
 |---|---|---|
 | 0:00 | Explain the Change tab, June → July selected | "Every trader gets a red number and no explanation. Vector Alpha is the Money-Ops 'explain the change' agent, pointed at your own brokerage history." |

@@ -99,7 +99,7 @@ export default function App() {
   const hasTavily = health?.has_tavily ?? health?.has_tavily_key ?? false;
 
   const hasLlm = health?.has_llm ?? health?.has_anthropic_key ?? false;
-  const llmLabel = hasLlm ? `GIDE · ${health?.llm_model || health?.model || 'local'}` : 'deterministic';
+  const llmLabel = hasLlm ? `${health?.llm_provider || 'LLM'} · ${(health?.llm_model || health?.model || 'local').replace(/^@cf\//, '')}` : 'deterministic';
   const llmTone: Tone = hasLlm ? 'violet' : 'amber';
 
   const prismLabel = prism?.live_connected
