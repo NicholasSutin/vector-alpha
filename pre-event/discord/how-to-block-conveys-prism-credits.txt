@@ -1,0 +1,28 @@
+PRISM CREDITS
+🎟️ Your PRISM Builder code: MONEYTALKS#1
+
+Every MONEY TALKS participant gets a free Builder plan + 100 credits.
+
+Please set this up tonight so you can start building at 10 AM without stopping to sign up.
+
+How to Claim
+Sign up at prism.blockconvey.com and complete onboarding
+Go to Settings → Billing & Usage
+Find "Have a code?" under the plan cards
+Enter MONEYTALKS#1 and click Apply
+
+⚠️ Type the code directly. Do not paste it into a URL. The # will cause issues.
+
+Before the Hackathon
+Run your agent once with prismtrace-sdk installed so you have data in PRISM when you start tomorrow.
+
+pip install prismtrace-sdk
+
+
+PRISM is about Observe → Improve → Prove.
+
+Use it to trace your agent, find bad runs, fix them, and prove that your finance AI is reliable.
+
+Stuck? Post on ⁠questions . Someone from Block Convey will be watching throughout the hackathon.
+PRISM, AI Failure Detection and Testing
+Block Convey helps teams test their AI before launch, understand how it behaves in production, and improve what users actually get.

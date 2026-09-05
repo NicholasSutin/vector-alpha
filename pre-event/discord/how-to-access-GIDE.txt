@@ -1,0 +1,44 @@
+GIDE
+GIDE is an AI code editor that can run fully offline.
+
+It includes a 9B parameter local model, Ornith 1.0, so you can write and run code on an air-gapped laptop. You can also connect to cloud models when you need more capability.
+
+Desktop App
+GIDE is a VS Code fork with:
+
+Ornith 1.0 9B for local inference
+Support for other GGUF models including Qwen, DeepSeek, and Gemma
+macOS, Windows, and Linux support
+No internet connection required
+Agentic coding with plan and write approval gates
+Refactoring across 21 languages
+Persistent structured memory
+Sandboxed shell
+MCP support
+Built-in safety guards
+
+CLI
+Run GIDE directly from your terminal:
+
+gide -p "fix the auth bug"
+
+
+It supports multi-step tasks with --continue and --resume, plus a local OpenAI-compatible API for scripts and CI pipelines.
+
+Actions are logged to JSONL for auditability.
+
+Cloud Models
+Bring your own API key to use Claude, GPT, or Gemini.
+
+You can switch between local and cloud models during a session. Requests go directly from GIDE to the provider.
+
+Private Cloud
+GIDE also offers an opt-in hosted Qwen model running on Azure.
+
+Processing is ephemeral. Prompts, code, and outputs are not logged or stored on GIDE's side.
+
+Enterprise customers can also request dedicated infrastructure.
+
+Get Started
+For the hackathon, use GIDE to build, test, and iterate quickly. You can work locally when you want privacy or connect to a larger cloud model when you need additional capability. 
+

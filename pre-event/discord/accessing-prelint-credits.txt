@@ -1,0 +1,14 @@
+🔴 PRELINT CREDITS
+
+Get $250 in Prelint credits and become eligible for the Prelint Prize.
+
+How to Claim
+
+Set up your GitHub repo
+Team leaders: Register at Prelint and onboard your project
+Go to Prelint Billing
+Enter the code MONEYTALKS to redeem $250 in credits
+
+Once set up, Prelint will automatically post code reviews on your GitHub pull requests.
+
+Important: Completing these steps makes your team eligible for the Prelint Prize.

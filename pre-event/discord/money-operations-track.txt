@@ -1,0 +1,48 @@
+Money Operations Track
+Khushi
+OP
+ — 5:08 AM
+MAXIMOR TRACK: MONEY OPERATIONS
+
+EXPLAIN THE CHANGE
+
+Build an AI agent that explains financial changes across multiple periods.
+
+Given simple inputs such as:
+
+Monthly account summaries
+Transaction-level CSVs
+
+Your agent should:
+
+Compare financial results across periods
+Identify the most meaningful variances
+Drill into transaction-level data to find the key drivers
+Produce a concise, evidence-backed explanation of what changed and why
+
+WHAT MAKES A STRONG SUBMISSION?
+
+The strongest agents don’t just analyze one dataset once.
+
+They iterate on the input data, learn from previous runs, and build intuition around the underlying business context over multiple agent runs.
+
+Your goal is to move from:
+
+“Revenue increased 18%.”
+
+to:
+
+“Revenue increased 18%, primarily driven by a 32% increase in enterprise accounts, with three customers accounting for 64% of the increase.”
+
+Build an agent that can answer:
+
+What changed? Why did it change? What is driving it?
+Khushi
+ changed the post title: Money Operations Track — 5:14 AM
+Prerna10 — 7:09 AM
+For the MAXIMOR Money Operations track, will you be providing sample monthly account summaries and transaction level CSVs, or should participants create/use their own synthetic datasets?
+Arun Prasad — 8:44 AM
+Use own synthetic datasets
+rmcmurrer — 10:18 AM
+the app i am building in gide it going for money operations
+
