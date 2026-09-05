@@ -108,11 +108,30 @@ def repair_truncated_json(text: str) -> dict | None:
 
 
 class LLMClient:
-    def __init__(self) -> None:
+    """OpenAI-compatible chat client. Defaults to the primary provider from settings; pass
+    base_url/model/api_key to build a second (fallback) provider."""
+
+    def __init__(self, base_url: str | None = None, model: str | None = None, api_key: str | None = None):
+        # None = "follow settings" (resolved lazily so tests / runtime env changes are honoured)
+        self._base_url = base_url
+        self._model = model
+        self._api_key = api_key
         self._client: Any = None
 
+    @property
+    def base_url(self) -> str:
+        return settings.llm_base_url if self._base_url is None else self._base_url
+
+    @property
+    def model(self) -> str:
+        return settings.llm_model if self._model is None else self._model
+
+    @property
+    def api_key(self) -> str:
+        return settings.llm_api_key if self._api_key is None else self._api_key
+
     def available(self) -> bool:
-        return bool(settings.has_llm)
+        return bool(self.base_url and self.model)
 
     def _client_or_none(self) -> Any:
         if self._client is not None:
@@ -123,8 +142,8 @@ class LLMClient:
             from openai import OpenAI  # type: ignore
 
             self._client = OpenAI(
-                base_url=settings.llm_base_url,
-                api_key=settings.llm_api_key or "not-needed",
+                base_url=self.base_url,
+                api_key=self.api_key or "not-needed",
                 timeout=settings.llm_timeout_s,
                 max_retries=0,
             )
@@ -137,7 +156,7 @@ class LLMClient:
     def _call(self, messages: list[dict], max_tokens: int, temperature: float, json_mode: bool):
         client = self._client_or_none()
         kwargs: dict[str, Any] = {
-            "model": settings.llm_model,
+            "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -155,7 +174,7 @@ class LLMClient:
     ) -> tuple[dict | None, dict[str, Any]]:
         """-> (parsed_json_or_None, meta{model, latency_ms, tokens_in, tokens_out, raw_text, error})"""
         meta: dict[str, Any] = {
-            "model": settings.llm_model or "",
+            "model": self.model or "",
             "latency_ms": 0,
             "tokens_in": 0,
             "tokens_out": 0,
@@ -249,4 +268,22 @@ class LLMClient:
         return parsed, meta
 
 
+
 llm = LLMClient()
+
+
+class _FallbackClient(LLMClient):
+    @property
+    def base_url(self) -> str:
+        return settings.llm_fallback_base_url
+
+    @property
+    def model(self) -> str:
+        return settings.llm_fallback_model
+
+    @property
+    def api_key(self) -> str:
+        return settings.llm_fallback_api_key
+
+
+llm_fallback = _FallbackClient()

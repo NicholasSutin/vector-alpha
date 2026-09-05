@@ -18,10 +18,10 @@ from typing import Any, Callable
 from app.agent import fallback as fallback_mod
 from app.agent import memory
 from app.agent.events import bus
-from app.agent.prompts import NARRATIVE_SYSTEM_PROMPT, build_narrative_message
+from app.agent.prompts import NARRATIVE_SYSTEM_PROMPT, build_narrative_message, narrative_system_prompt, narrative_max_tokens
 from app.config import settings
 from app.db import get_conn, now_iso
-from app.integrations.llm import llm
+from app.integrations.llm import llm, llm_fallback
 from app.integrations.prism import prism
 from app.models import Report
 
@@ -500,14 +500,22 @@ async def run_analysis(run_id: str, a: str, b: str, question: str | None = None)
             bus.publish(run_id, {"type": "tool_call", "name": "llm_narrative",
                                  "input": {"model": settings.llm_model, "chars": len(user_msg)}})
             parsed, llm_meta = await asyncio.to_thread(
-                llm.chat_json, NARRATIVE_SYSTEM_PROMPT, user_msg, 420, 0.2
+                llm.chat_json, narrative_system_prompt(settings.llm_base_url), user_msg, narrative_max_tokens(settings.llm_base_url), 0.2
             )
+            if parsed is None and settings.has_llm_fallback:
+                _status(run_id, f"Primary model unusable ({llm_meta.get('error')}) — trying fallback {settings.llm_fallback_model}")
+                parsed, fb_meta = await asyncio.to_thread(
+                    llm_fallback.chat_json, narrative_system_prompt(settings.llm_fallback_base_url), user_msg,
+                    narrative_max_tokens(settings.llm_fallback_base_url), 0.2
+                )
+                if parsed is not None:
+                    llm_meta = fb_meta
             model_used = llm_meta.get("model") or settings.llm_model or "llm"
             secs = (llm_meta.get("latency_ms") or 0) / 1000.0
             merged = _merge_narrative(report, parsed) if parsed else False
             if merged:
                 used_fallback = False
-                _status(run_id, f"Narrative layer from local model ({secs:.0f} s)")
+                _status(run_id, f"Narrative layer from {llm_meta.get('model') or settings.llm_model} ({secs:.0f} s)")
                 bus.publish(run_id, {"type": "tool_result", "name": "llm_narrative",
                                      "summary": str(report.get("headline"))[:300]})
             else:

@@ -26,6 +26,17 @@ def save_insight(run_id: str | None, kind: str, text: str, evidence: list[str] |
     created = now_iso()
     ev = [str(e) for e in (evidence or [])][:20]
     with get_conn() as conn:
+        # Re-running the same period pair must not pile up duplicate memories: reuse an existing
+        # row with the same kind + text (the run that first produced it keeps ownership).
+        dup = conn.execute(
+            "SELECT id, run_id, created_at, kind, text, evidence_json, status FROM insights WHERE kind=? AND text=? LIMIT 1",
+            (kind, text),
+        ).fetchone()
+        if dup is not None:
+            return {
+                "id": dup["id"], "run_id": dup["run_id"], "created_at": dup["created_at"], "kind": dup["kind"],
+                "text": dup["text"], "evidence": json.loads(dup["evidence_json"] or "[]"), "status": dup["status"],
+            }
         conn.execute(
             "INSERT INTO insights (id, run_id, created_at, kind, text, evidence_json, status) VALUES (?,?,?,?,?,?,?)",
             (iid, run_id, created, kind, text, json.dumps(ev), "open"),

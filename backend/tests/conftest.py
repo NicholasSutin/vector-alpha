@@ -15,7 +15,7 @@ from pathlib import Path
 _TMP = Path(tempfile.mkdtemp(prefix="vector-alpha-test-"))
 os.environ["VA_DB_PATH"] = str(_TMP / "test.db")
 for _k in ("PRISMTRACE_API_KEY", "PRISMTRACE_PROJECT_ID", "TAVILY_API_KEY",
-           "LLM_BASE_URL", "LLM_MODEL"):
+           "LLM_BASE_URL", "LLM_MODEL", "LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_MODEL", "LLM_FALLBACK_API_KEY"):
     os.environ[_k] = ""
 
 import pytest  # noqa: E402
@@ -25,6 +25,7 @@ from app.config import settings  # noqa: E402
 # hard-disable every outbound integration for the whole test session
 for _field, _blank in (
     ("llm_base_url", ""), ("llm_model", ""), ("tavily_api_key", ""),
+    ("llm_fallback_base_url", ""), ("llm_fallback_model", ""), ("llm_fallback_api_key", ""),
     ("prism_api_key", ""), ("prism_project_id", ""),
     ("db_path", _TMP / "test.db"),
 ):

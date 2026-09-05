@@ -43,6 +43,10 @@ class Settings:
     llm_model: str = os.getenv("LLM_MODEL", "")                  # e.g. ornith-1.0
     llm_timeout_s: float = float(os.getenv("LLM_TIMEOUT_S", "120"))
     llm_supports_tools: bool = _bool(os.getenv("LLM_SUPPORTS_TOOLS"), False)
+    # optional second provider tried when the primary errors or returns unusable JSON
+    llm_fallback_base_url: str = os.getenv("LLM_FALLBACK_BASE_URL", "")
+    llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "")
+    llm_fallback_api_key: str = os.getenv("LLM_FALLBACK_API_KEY", "")
 
     # --- Tavily ---
     tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
@@ -67,6 +71,10 @@ class Settings:
     @property
     def has_llm(self) -> bool:
         return bool(self.llm_base_url and self.llm_model)
+
+    @property
+    def has_llm_fallback(self) -> bool:
+        return bool(self.llm_fallback_base_url and self.llm_fallback_model)
 
     @property
     def has_tavily(self) -> bool:

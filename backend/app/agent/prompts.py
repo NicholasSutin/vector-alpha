@@ -230,8 +230,9 @@ def build_narrative_message(
     p.append("DRIVERS:")
     for d in drivers:
         p.append(
-            f"- {d.get('key')} ({d.get('dimension')}) {d.get('a')}->{d.get('b')} "
-            f"contrib {d.get('contribution_pct')} lots {','.join((d.get('evidence_lot_ids') or [])[:3])}"
+            f"- {d.get('key')} ({d.get('dimension')}): ${float(d.get('a') or 0):,.0f} -> ${float(d.get('b') or 0):,.0f} "
+            f"(delta ${float(d.get('delta') or 0):,.0f}, {float(d.get('contribution_pct') or 0):.0%} of the total change) "
+            f"evidence lots: {','.join((d.get('evidence_lot_ids') or [])[:3]) or 'none'}"
         )
     p.append("BEHAVIOUR: " + _clip("; ".join(str(f) for f in flags), 240))
     if prior_insights:
@@ -257,6 +258,24 @@ def build_narrative_message(
         msg = msg[: budget - 60].rsplit("\n", 1)[0] + "\nReturn ONLY the JSON object. Under 120 words."
     return msg
 
-NARRATIVE_SYSTEM_PROMPT = NARRATIVE_SYSTEM_PROMPT.rstrip() + """
+_SIZE_TIGHT = """
 
-OUTPUT SIZE (hard limits — output is cut at ~400 tokens): keys in this order: headline, why, behaviour, market_context, company_changes. headline: one sentence ≤ 30 words. why: exactly 3 strings, each ≤ 18 words. behaviour: exactly 2 strings, each ≤ 15 words. market_context: at most 3 short strings (empty list if no MARKET CONTEXT given). company_changes: at most 3 items (empty list if none given). No other keys. Total under 110 words."""
+OUTPUT SIZE (hard limits — output is cut at ~500 tokens): keys in this order: headline, why, behaviour, market_context, company_changes. headline: one sentence ≤ 30 words. why: exactly 3 strings, each ≤ 18 words. behaviour: exactly 2 strings, each ≤ 15 words. market_context: at most 3 short strings (empty list if no MARKET CONTEXT given). company_changes: at most 3 items (empty list if none given). No other keys. Total under 110 words."""
+
+_SIZE_GENEROUS = """
+
+OUTPUT SIZE: keys in this order: headline, why, behaviour, market_context, company_changes. headline: one sentence ≤ 35 words in the style "X fell 63%, primarily driven by Y (71% of the move, 3 lots), amplified by Z". why: 3-5 strings ≤ 30 words each, every one citing a number and an evidence id (lot id / fact#). behaviour: 2-3 strings. market_context: 3-5 strings when MARKET CONTEXT is given (each ending with [source: url]), else []. company_changes: one item per company in COMPANY CONTEXT (2 sentences each, cite the source), else []. No other keys. Total under 280 words."""
+
+
+def is_local_llm(base_url: str) -> bool:
+    u = (base_url or "").lower()
+    return u == "" or "127.0.0.1" in u or "localhost" in u
+
+
+def narrative_system_prompt(base_url: str) -> str:
+    """Tight limits for a ~8 tok/s local 9B (GIDE); generous for cloud endpoints (Cloudflare Workers AI...)."""
+    return NARRATIVE_SYSTEM_PROMPT.rstrip() + (_SIZE_TIGHT if is_local_llm(base_url) else _SIZE_GENEROUS)
+
+
+def narrative_max_tokens(base_url: str) -> int:
+    return 520 if is_local_llm(base_url) else 900
